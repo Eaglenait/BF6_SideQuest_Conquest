@@ -27,8 +27,5 @@
   "playerWelcomeMessage": "Welcome!",
   "gameManagerPlayerDeployedLog": "[GameManager] Player deployed: {}",
   "gameManagerDamageUpdateError": "[GameManager] Failed to update quests for damage event:",
-  "exampleMessage": "example",
-  "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager.",
-  "testError": "test error",
-  "testWarn": "test warn"
+  "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager."
 }
