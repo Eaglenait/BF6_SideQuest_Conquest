@@ -17,6 +17,7 @@ interface QuestContext {
     progress?: QuestProgress;
     questInstance?: QuestInstance;
     updateSource?: QuestUpdateSource;
+    perkInstance?: PerkInstance;
 }
 
 /** Base interface for progress of the quest instance */
@@ -41,6 +42,25 @@ interface QuestUpdateResult extends QuestProgress {
     nextState?: QuestState_Enum;
 }
 const defaultUpdateResult: QuestUpdateResult = { current: 0, target: 1, percent: 0, state: QuestState_Enum.NotStarted, nextState: QuestState_Enum.NotStarted};
+
+type PerkApply = (ctx: PerkContext) => Promise<void> | void;
+
+interface PerkContext extends QuestContext {
+    targets?: mod.Player[];
+}
+
+interface PerkDefinition {
+    name: string;
+    description?: string;
+    availableScopes: QuestScope[];
+    randomWeight?: number;
+    createInstance(questInstance: QuestInstance): PerkInstance;
+}
+
+interface PerkInstance {
+    definition: PerkDefinition;
+    apply: PerkApply;
+}
 
 /** Who can complete the quest. Also who wins the perk of the completion */
 enum QuestScope {
@@ -87,7 +107,6 @@ class QuestDefinition {
     availableScope: QuestScope[] = [];
     /** Weight for random selection, higher means more likely to be chosen */
     randomWeight?: number = 1; 
-
     updateSources: QuestUpdateSource[] = []; 
 
     /** 
@@ -98,6 +117,12 @@ class QuestDefinition {
      * If the quest is to interact with something once, this value should be 1
      */
     defaultTarget?: number = 1;
+
+    /** Optional perk pool overriding the global registry when instantiating this quest. */
+    perkPool?: PerkDefinition[];
+
+    /** Disable automatic perk assignment when true. */
+    disableRandomPerk?: boolean;
 
     /** To be called to update the quest state */
     update: (ctx: QuestContext) => QuestUpdateResult
@@ -120,6 +145,7 @@ class QuestInstance {
     readonly id: number;
     readonly quest: QuestDefinition;
     readonly scope: QuestScope;
+    perkInstance?: PerkInstance;
 
     player?: mod.Player;
     squad?: mod.Squad;
@@ -180,6 +206,13 @@ class QuestManager {
             Log(STR.questManagerRegisterQuest, ctx.eventPlayer, questDef.name, QuestScope[scope]);
         }
 
+        if (!questDef.disableRandomPerk) {
+            const perkInstance = this.pickPerkForQuest(questInstance);
+            if (perkInstance) {
+                questInstance.perkInstance = perkInstance;
+            }
+        }
+
         if (scope === QuestScope.Game) {
             this.activeGlobalQuest = questInstance;
         } else {
@@ -190,7 +223,8 @@ class QuestManager {
             ...ctx,
             questInstance,
             progress: questInstance.currentProgress,
-            updateSource: undefined
+            updateSource: undefined,
+            perkInstance: questInstance.perkInstance
         };
 
         if (questDef.onStart) {
@@ -287,7 +321,8 @@ class QuestManager {
             progress,
             eventPlayer: ctx.eventPlayer ?? questInstance.player,
             eventSquad: ctx.eventSquad ?? questInstance.squad,
-            eventTeam: ctx.eventTeam ?? questInstance.team
+            eventTeam: ctx.eventTeam ?? questInstance.team,
+            perkInstance: questInstance.perkInstance
         };
 
         if (questCtx.eventPlayer) {
@@ -328,6 +363,31 @@ class QuestManager {
             Log(STR.questManagerQuestCompleted, ctx.eventPlayer, questInstance.quest.name, questInstance.id);
         }
 
+        if (questInstance.perkInstance) {
+            const targets = playersMatchingQuest(questInstance);
+            const recipients = targets.length > 0 ? targets : ctx.eventPlayer ? [ctx.eventPlayer] : [];
+            const perkCtx: PerkContext = {
+                ...ctx,
+                questInstance,
+                perkInstance: questInstance.perkInstance,
+                targets: recipients
+            };
+            try {
+                const result = questInstance.perkInstance.apply(perkCtx);
+                if (isPromiseLike(result)) {
+                    Promise.resolve(result).catch((error: unknown) => {
+                        if (perkCtx.eventPlayer) {
+                            DebugMessage("Perk application failed: %1", error);
+                        }
+                    });
+                }
+            } catch (err: unknown) {
+                if (perkCtx.eventPlayer) {
+                    DebugMessage("Perk application failed: %1", err);
+                }
+            }
+        }
+
         this.unregisterQuest(questInstance);
         this.pastQuests.push(questInstance);
 
@@ -355,6 +415,21 @@ class QuestManager {
 
     private getTeamQuests(team: mod.Team): QuestInstance[] {
         return this.activeQuests.filter(quest => quest.team === team);
+    }
+
+    private pickPerkForQuest(questInstance: QuestInstance): PerkInstance | undefined {
+        const pool = questInstance.quest.perkPool ?? PerkRegistry;
+        if (!pool || pool.length === 0) {
+            return undefined;
+        }
+
+        const eligible = pool.filter((def: PerkDefinition) => def.availableScopes.includes(questInstance.scope));
+        if (eligible.length === 0) {
+            return undefined;
+        }
+
+        const selected = pickWeightedPerk(eligible);
+        return selected.createInstance(questInstance);
     }
 
     private notifyQuestStart(questInstance: QuestInstance) {
@@ -420,45 +495,97 @@ var q_manager = new QuestManager();
 var requiredPlayersToStart: number = 4;
 var gameStartCountdown: number = 60;
 
-const SELF_DAMAGE_QUEST_NAME = STR.selfDamageQuestName;
-
-const SelfDamageQuestDefinition: QuestDefinition = {
-    name: SELF_DAMAGE_QUEST_NAME,
-    description: STR.selfDamageQuestDescription,
-    availableScope: [QuestScope.Game],
-    defaultTarget: 1,
-    updateSources: [QuestUpdateSource.OnPlayerReceivesDamage],
-    update: upd_SelfDamage,
-    onStart: (ctx: QuestContext) => {
-        if (ctx.eventPlayer) {
-            Log(STR.selfDamageQuestStartedLog, ctx.eventPlayer);
-        }
-    },
-    onComplete: (ctx: QuestContext) => {
-        if (ctx.eventPlayer) {
-            Log(STR.selfDamageQuestCompletedLog, ctx.eventPlayer);
-        }
-    }
-};
 
 /** Implementation of all available quests */
 var QuestRegistry: QuestDefinition[] = [
     {
-        name: STR.firstBloodQuestName,
-        description: STR.firstBloodQuestDescription,
+        name: STR.quests.firstBloodQuest.name,
+        description: STR.quests.firstBloodQuest.description,
         availableScope: [QuestScope.Game],
         updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
         update: upd_FirstKill
     },
     {
-        name: STR.pistolQuestName,
-        description: STR.pistolQuestDescription,
+        name: STR.quests.pistolKillsQuest.name,
+        description: STR.quests.pistolKillsQuest.description,
         availableScope: AllQuestScopes,
         updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
         update: upd_PistolKills
-    },
-    SelfDamageQuestDefinition
+    }
 ];
+
+//-- Perks
+
+const SPEED_BOOST_MULTIPLIER = 1.5;
+const SPEED_BOOST_DURATION_SECONDS = 20;
+
+const SpeedBoostPerkDefinition: PerkDefinition = {
+    name: STR.perks.speedBoost.name,
+    description: STR.perks.speedBoost.description,
+    availableScopes: AllQuestScopes,
+    randomWeight: 1,
+    createInstance: (questInstance: QuestInstance): PerkInstance => ({
+        definition: SpeedBoostPerkDefinition,
+        apply: async (ctx: PerkContext) => {
+            const initialTargets = ctx.targets ?? playersMatchingQuest(questInstance);
+            const recipients = initialTargets.length > 0 ? initialTargets : ctx.eventPlayer ? [ctx.eventPlayer] : [];
+            if (recipients.length === 0) {
+                return;
+            }
+
+            for (const target of recipients) {
+                void applyTemporarySpeedMultiplier(target, SPEED_BOOST_MULTIPLIER, SPEED_BOOST_DURATION_SECONDS);
+            }
+        }
+    })
+};
+
+const PerkRegistry: PerkDefinition[] = [SpeedBoostPerkDefinition];
+
+function pickWeightedPerk(definitions: PerkDefinition[]): PerkDefinition {
+    const totalWeight = definitions.reduce((sum, def) => sum + (def.randomWeight ?? 1), 0);
+    let roll = Math.random() * (totalWeight <= 0 ? 1 : totalWeight);
+    for (const def of definitions) {
+        roll -= def.randomWeight ?? 1;
+        if (roll <= 0) {
+            return def;
+        }
+    }
+    return definitions[definitions.length - 1];
+}
+
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+    return !!value && typeof (value as PromiseLike<T>).then === "function";
+}
+
+const g_playerSpeedTokens: { [playerId: number]: number } = {};
+let g_nextSpeedToken = 1;
+
+async function applyTemporarySpeedMultiplier(player: mod.Player, multiplier: number, durationSeconds: number): Promise<void> {
+    if (!player) {
+        return;
+    }
+
+    const playerId = mod.GetObjId(player);
+    if (playerId < 0) {
+        return;
+    }
+
+    const token = g_nextSpeedToken++;
+    g_playerSpeedTokens[playerId] = token;
+    mod.SetPlayerMovementSpeedMultiplier(player, multiplier);
+
+    if (durationSeconds <= 0) {
+        return;
+    }
+
+    await mod.Wait(durationSeconds);
+
+    if (g_playerSpeedTokens[playerId] === token) {
+        mod.SetPlayerMovementSpeedMultiplier(player, 1);
+        delete g_playerSpeedTokens[playerId];
+    }
+}
 
 function upd_FirstKill(ctx: QuestContext): QuestUpdateResult {
     return defaultUpdateResult;
@@ -467,51 +594,6 @@ function upd_FirstKill(ctx: QuestContext): QuestUpdateResult {
 function upd_PistolKills(ctx: QuestContext): QuestUpdateResult {
     //todo
     return defaultUpdateResult;
-}
-
-function upd_SelfDamage(ctx: QuestContext): QuestUpdateResult {
-    const progress = ctx.progress ?? new QuestProgress(1);
-    const target = progress.target > 0 ? progress.target : 1;
-
-    if (!ctx.eventPlayer) {
-        return {
-            current: progress.current,
-            target,
-            percent: progress.percent,
-            state: progress.state,
-            nextState: progress.state
-        };
-    }
-
-    const playerId = mod.GetObjId(ctx.eventPlayer);
-    const otherId = ctx.eventOtherPlayer ? mod.GetObjId(ctx.eventOtherPlayer) : -1;
-    const samePlayer = otherId !== -1 && otherId === playerId;
-    const isSelfDamage = samePlayer || otherId === -1;
-
-    if (!isSelfDamage) {
-        return {
-            current: progress.current,
-            target,
-            percent: progress.percent,
-            state: progress.state,
-            nextState: progress.state
-        };
-    }
-
-    const nextCurrent = Math.min(progress.current + 1, target);
-    const completed = nextCurrent >= target;
-    const nextState = completed ? QuestState_Enum.Completed : QuestState_Enum.InProgress;
-    const percent = Math.round(Math.min(1, nextCurrent / target) * 100);
-
-    Log(STR.selfDamageQuestProgressLog, ctx.eventPlayer, nextCurrent, target);
-
-    return {
-        current: nextCurrent,
-        target,
-        percent,
-        state: nextState,
-        nextState
-    };
 }
 
 ////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
@@ -634,7 +716,7 @@ export async function OnGameModeStarted(): Promise<void> {
     await mod.Wait(1);
 
     q_manager.init([
-        { quest: SelfDamageQuestDefinition, scope: QuestScope.Game, ctx: {} }
+        { quest: QuestRegistry[0], scope: QuestScope.Game, ctx: {} }
     ]);
 
     // Initialize quest UI for any already tracked players (if any)
