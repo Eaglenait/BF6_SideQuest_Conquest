@@ -82,8 +82,8 @@ enum QuestFailReason {
 
 /** Describes a quest to be completed by a squad, player or team */
 class QuestDefinition {
-    name: string = "" ;
-    description: string = "";
+    name: string = STR.empty ;
+    description: string = STR.empty;
     availableScope: QuestScope[] = [];
     /** Weight for random selection, higher means more likely to be chosen */
     randomWeight?: number = 1; 
@@ -100,16 +100,16 @@ class QuestDefinition {
     defaultTarget?: number = 1;
 
     /** To be called to update the quest state */
-    update: (ctx: QuestContext) => Promise<QuestUpdateResult>
+    update: (ctx: QuestContext) => QuestUpdateResult
 
     /** Optional; used to prepare state or emit UI when quest spawns. */
-    onStart?: (ctx: QuestContext) => Promise<void>;
+    onStart?: (ctx: QuestContext) => void;
 
     /** Optional; invoked once when quest completes (can grant rewards, notify UI, spawn next quest, etc.). */
-    onComplete?: (ctx: QuestContext) => Promise<void>;
+    onComplete?: (ctx: QuestContext) => void;
 
     constructor() {
-        this.update = async (ctx: QuestContext) => { return defaultUpdateResult; };
+        this.update = (ctx: QuestContext) => { return defaultUpdateResult; };
     }
 }
 
@@ -164,22 +164,21 @@ class QuestManager {
 
     constructor() {}
 
-    async init(initialQuests: { quest: QuestDefinition; scope: QuestScope; ctx: QuestContext }[] = []) {
-        console.log(MakeMessage(STR.questManagerInitializing));
-
+    init(initialQuests: { quest: QuestDefinition; scope: QuestScope; ctx: QuestContext }[] = []) {
         this.activeQuests = [];
         this.pastQuests = [];
         this.activeGlobalQuest = undefined;
 
         for (const config of initialQuests) {
-            await this.registerQuest(config.quest, config.scope, config.ctx);
+            this.registerQuest(config.quest, config.scope, config.ctx);
         }
     }
 
-    async registerQuest(questDef: QuestDefinition, scope: QuestScope, ctx: QuestContext): Promise<QuestInstance> {
-        console.log(MakeMessage(STR.questManagerRegisterQuest, questDef.name, QuestScope[scope]));
-
+    registerQuest(questDef: QuestDefinition, scope: QuestScope, ctx: QuestContext): QuestInstance {
         const questInstance = new QuestInstance(questDef, scope, ctx);
+        if (ctx.eventPlayer) {
+            Log(STR.questManagerRegisterQuest, ctx.eventPlayer, questDef.name, QuestScope[scope]);
+        }
 
         if (scope === QuestScope.Game) {
             this.activeGlobalQuest = questInstance;
@@ -196,9 +195,11 @@ class QuestManager {
 
         if (questDef.onStart) {
             try {
-                await questDef.onStart(startCtx);
+                questDef.onStart(startCtx);
             } catch (err) {
-                console.error(MakeMessage(STR.questManagerOnStartError, questDef.name), err);
+                if (startCtx.eventPlayer) {
+                    Log(STR.questManagerOnStartError, startCtx.eventPlayer, questDef.name, err);
+                }
             }
         }
 
@@ -208,7 +209,7 @@ class QuestManager {
     }
 
     unregisterQuest(questInstance: QuestInstance) {
-        console.log(MakeMessage(STR.questManagerUnregisterQuest, questInstance.quest.name, questInstance.id));
+        // No reliable player context here; skipping log.
 
         if (questInstance.scope === QuestScope.Game) {
             if (this.activeGlobalQuest?.id === questInstance.id) {
@@ -221,16 +222,16 @@ class QuestManager {
     }
 
     resetPlayer(player: mod.Player) {
-        console.log(MakeMessage(STR.questManagerResetPlayer, player));
+        Log(STR.questManagerResetPlayer, player, player);
         this.activeQuests = this.activeQuests.filter(instance => instance.player !== player);
     }
 
     playerJoined(player: mod.Player) {
         const team = mod.GetTeam(player);
-        console.log(MakeMessage(STR.questManagerPlayerJoined, player, team));
+        Log(STR.questManagerPlayerJoined, player, player, team);
     }
 
-    async updatePlayer(player: mod.Player, source: QuestUpdateSource, ctx: QuestContext): Promise<void> {
+    updatePlayer(player: mod.Player, source: QuestUpdateSource, ctx: QuestContext): void {
         const enrichedCtx: QuestContext = {
             ...ctx,
             eventPlayer: ctx.eventPlayer ?? player,
@@ -268,11 +269,11 @@ class QuestManager {
                 continue;
             }
 
-            await this.processQuestUpdate(questInstance, enrichedCtx);
+            this.processQuestUpdate(questInstance, enrichedCtx);
         }
     }
 
-    private async processQuestUpdate(questInstance: QuestInstance, ctx: QuestContext) {
+    private processQuestUpdate(questInstance: QuestInstance, ctx: QuestContext) {
         const progress = questInstance.currentProgress;
         const quest = questInstance.quest;
 
@@ -289,7 +290,9 @@ class QuestManager {
             eventTeam: ctx.eventTeam ?? questInstance.team
         };
 
-        console.log(MakeMessage(STR.questManagerUpdatingQuest, quest.name, questInstance.id, questCtx.eventPlayer));
+        if (questCtx.eventPlayer) {
+            Log(STR.questManagerUpdatingQuest, questCtx.eventPlayer, quest.name, questInstance.id, questCtx.eventPlayer);
+        }
 
         try {
             const previousCurrent = progress.current;
@@ -297,7 +300,7 @@ class QuestManager {
             const previousPercent = progress.percent;
             const previousState = progress.state;
 
-            const result = await quest.update(questCtx);
+            const result = quest.update(questCtx);
 
             if (result) {
                 progress.current = result.current;
@@ -311,15 +314,19 @@ class QuestManager {
 
             if (result?.nextState === QuestState_Enum.Completed || progress.state === QuestState_Enum.Completed) {
                 progress.state = QuestState_Enum.Completed;
-                await this.handleQuestCompletion(questInstance, questCtx);
+                this.handleQuestCompletion(questInstance, questCtx);
             }
         } catch (err) {
-            LogAdmin(STR.questManagerUpdateError, quest.name, questInstance.id, err);
+            if (ctx.eventPlayer) {
+                Log(STR.questManagerUpdateError, ctx.eventPlayer, quest.name, questInstance.id, err);
+            }
         }
     }
 
-    private async handleQuestCompletion(questInstance: QuestInstance, ctx: QuestContext) {
-        LogAdmin(STR.questManagerQuestCompleted, questInstance.quest.name, questInstance.id);
+    private handleQuestCompletion(questInstance: QuestInstance, ctx: QuestContext) {
+        if (ctx.eventPlayer) {
+            Log(STR.questManagerQuestCompleted, ctx.eventPlayer, questInstance.quest.name, questInstance.id);
+        }
 
         this.unregisterQuest(questInstance);
         this.pastQuests.push(questInstance);
@@ -328,9 +335,11 @@ class QuestManager {
 
         if (questInstance.quest.onComplete) {
             try {
-                await questInstance.quest.onComplete(ctx);
+                questInstance.quest.onComplete(ctx);
             } catch (err) {
-                LogAdmin(STR.questManagerOnCompleteError, questInstance.quest.name, err);
+                if (ctx.eventPlayer) {
+                    Log(STR.questManagerOnCompleteError, ctx.eventPlayer, questInstance.quest.name, err);
+                }
             }
         }
 
@@ -349,7 +358,8 @@ class QuestManager {
     }
 
     private notifyQuestStart(questInstance: QuestInstance) {
-        this.broadcastQuestMessage(questInstance, STR.questStartedNotification, [questInstance.quest.name]);
+        // Refresh UI for all players impacted by this quest start
+        try { RefreshUIForQuestScope(questInstance); } catch {}
     }
 
     private notifyQuestProgress(questInstance: QuestInstance, ctx: QuestContext, previousPercent: number, nextPercent: number) {
@@ -358,48 +368,47 @@ class QuestManager {
         }
 
         const clampedPercent = Math.min(100, Math.max(0, Math.round(nextPercent)));
-        this.broadcastQuestMessage(questInstance, STR.questProgressNotification, [questInstance.quest.name, clampedPercent], ctx.eventPlayer);
+        if (ctx.eventPlayer) {
+            Log(STR.questProgressNotification, ctx.eventPlayer, questInstance.quest.name, clampedPercent);
+        }
+
+        // Update UI for all players impacted by this quest
+        try { RefreshUIForQuestScope(questInstance); } catch {}
     }
 
     private notifyQuestCompletion(questInstance: QuestInstance, ctx: QuestContext) {
-        this.broadcastQuestMessage(questInstance, STR.questCompletedNotification, [questInstance.quest.name], ctx.eventPlayer);
+        if (ctx.eventPlayer) {
+            Log(STR.questCompletedNotification, ctx.eventPlayer, questInstance.quest.name);
+        }
+
+        // Update UI for all players that were seeing this quest
+        try { RefreshUIForQuestScope(questInstance); } catch {}
     }
+    // broadcastQuestMessage removed per simplified logging policy.
 
-    private broadcastQuestMessage(questInstance: QuestInstance, messageKey: string, args: any[] = [], preferredPlayer?: mod.Player) {
-        switch (questInstance.scope) {
-            case QuestScope.Player:
-                if (questInstance.player) {
-                    LogAdmin(STR.questManagerNotifyPlayer, questInstance.player, questInstance.quest.name);
-                    return;
-                }
-                break;
-            case QuestScope.Team:
-                if (questInstance.team) {
-                    LogAdmin(STR.questManagerNotifyTeam, questInstance.team, questInstance.quest.name);
-                    return;
-                }
-                break;
-            case QuestScope.Squad:
-                if (questInstance.squad) {
-                    const players = ConvertArray(mod.AllPlayers()) as mod.Player[];
-                    for (const player of players) {
-                        if (mod.GetSquad(player) === questInstance.squad) {
-                            LogAdmin(STR.questManagerNotifyPlayer, player, questInstance.quest.name);
-                        }
-                    }
-                    return;
-                }
-                break;
-            case QuestScope.Game:
-                LogAdmin(STR.questManagerNotifyAll, questInstance.quest.name);
-                return;
+    /** Returns the most relevant quest for a given player, prioritizing Player > Squad > Team > Game */
+    getRelevantQuestForPlayer(player: mod.Player): QuestInstance | undefined {
+        // Player-scoped
+        const playerQuest = this.activeQuests.find(q => q.scope === QuestScope.Player && q.player && mod.GetObjId(q.player) === mod.GetObjId(player));
+        if (playerQuest) return playerQuest;
+
+        // Squad-scoped
+        const getSquad = (mod as any).GetSquad as undefined | ((p: mod.Player) => mod.Squad);
+        const playerSquad = getSquad ? getSquad(player) : undefined;
+        if (playerSquad) {
+            const squadQuest = this.activeQuests.find(q => q.scope === QuestScope.Squad && q.squad && q.squad === playerSquad);
+            if (squadQuest) return squadQuest;
         }
 
-        if (preferredPlayer) {
-            LogAdmin(STR.questManagerNotifyPlayer, preferredPlayer, questInstance.quest.name);
-        } else {
-            LogAdmin(STR.questManagerNotifyNoRecipient, questInstance.quest.name);
-        }
+        // Team-scoped
+        const playerTeam = mod.GetTeam(player);
+        const teamQuest = this.activeQuests.find(q => q.scope === QuestScope.Team && q.team && q.team === playerTeam);
+        if (teamQuest) return teamQuest;
+
+        // Global
+        if (this.activeGlobalQuest) return this.activeGlobalQuest;
+
+        return undefined;
     }
 }
 
@@ -420,16 +429,14 @@ const SelfDamageQuestDefinition: QuestDefinition = {
     defaultTarget: 1,
     updateSources: [QuestUpdateSource.OnPlayerReceivesDamage],
     update: upd_SelfDamage,
-    onStart: async (ctx: QuestContext) => {
-        LogAdmin(STR.selfDamageQuestStartedLog);
+    onStart: (ctx: QuestContext) => {
+        if (ctx.eventPlayer) {
+            Log(STR.selfDamageQuestStartedLog, ctx.eventPlayer);
+        }
     },
-    onComplete: async (ctx: QuestContext) => {
-        LogAdmin(STR.selfDamageQuestCompletedLog, ctx.eventPlayer);
-
-        try {
-            await q_manager.registerQuest(SelfDamageQuestDefinition, QuestScope.Game, {});
-        } catch (err) {
-            LogAdmin(STR.selfDamageQuestRestartError, err);
+    onComplete: (ctx: QuestContext) => {
+        if (ctx.eventPlayer) {
+            Log(STR.selfDamageQuestCompletedLog, ctx.eventPlayer);
         }
     }
 };
@@ -453,23 +460,20 @@ var QuestRegistry: QuestDefinition[] = [
     SelfDamageQuestDefinition
 ];
 
-function upd_FirstKill(ctx: QuestContext): Promise<QuestUpdateResult> {
-    return Promise.resolve(defaultUpdateResult);
+function upd_FirstKill(ctx: QuestContext): QuestUpdateResult {
+    return defaultUpdateResult;
 }
 
-function upd_PistolKills(ctx: QuestContext): Promise<QuestUpdateResult> {
+function upd_PistolKills(ctx: QuestContext): QuestUpdateResult {
     //todo
-    return Promise.resolve(defaultUpdateResult);
+    return defaultUpdateResult;
 }
 
-async function upd_SelfDamage(ctx: QuestContext): Promise<QuestUpdateResult> {
+function upd_SelfDamage(ctx: QuestContext): QuestUpdateResult {
     const progress = ctx.progress ?? new QuestProgress(1);
     const target = progress.target > 0 ? progress.target : 1;
-    const isSelfDamage = !!ctx.eventPlayer && ctx.eventPlayer === ctx.eventOtherPlayer;
 
     if (!ctx.eventPlayer) {
-        LogAdmin(STR.selfDamageQuestUpdateNoPlayer);
-
         return {
             current: progress.current,
             target,
@@ -479,8 +483,12 @@ async function upd_SelfDamage(ctx: QuestContext): Promise<QuestUpdateResult> {
         };
     }
 
+    const playerId = mod.GetObjId(ctx.eventPlayer);
+    const otherId = ctx.eventOtherPlayer ? mod.GetObjId(ctx.eventOtherPlayer) : -1;
+    const samePlayer = otherId !== -1 && otherId === playerId;
+    const isSelfDamage = samePlayer || otherId === -1;
+
     if (!isSelfDamage) {
-        
         return {
             current: progress.current,
             target,
@@ -495,7 +503,6 @@ async function upd_SelfDamage(ctx: QuestContext): Promise<QuestUpdateResult> {
     const nextState = completed ? QuestState_Enum.Completed : QuestState_Enum.InProgress;
     const percent = Math.round(Math.min(1, nextCurrent / target) * 100);
 
-    LogAdmin(STR.selfDamageQuestProgressLog, ctx.eventPlayer, nextCurrent, target);
     Log(STR.selfDamageQuestProgressLog, ctx.eventPlayer, nextCurrent, target);
 
     return {
@@ -511,15 +518,27 @@ async function upd_SelfDamage(ctx: QuestContext): Promise<QuestUpdateResult> {
 
 // Triggered when player joins the game
 export async function OnPlayerJoinGame(eventPlayer: mod.Player): Promise<void> {
+    ensurePlayerTracked(eventPlayer);
 }
 
 // Triggered when player leaves the game
 export async function OnPlayerLeaveGame(eventNumber: number): Promise<void> {
+    // eventNumber is player ObjId per BF Portal convention
+    const idx = g_activePlayers.findIndex(p => mod.GetObjId(p) === eventNumber);
+    if (idx !== -1) {
+        const player = g_activePlayers[idx];
+        hidePlayerQuestUI(player);
+        g_activePlayers.splice(idx, 1);
+        delete g_playerUIs[eventNumber];
+    }
 }
 
 // Triggered when player selects their class and deploys into game
 export async function OnPlayerDeployed(eventPlayer: mod.Player): Promise<void> {
-    LogAdmin(STR.gameManagerPlayerDeployedLog, eventPlayer);
+    Log(STR.gameManagerPlayerDeployedLog, eventPlayer);
+    ensurePlayerTracked(eventPlayer);
+    ensurePlayerQuestUI(eventPlayer);
+    refreshUIForPlayer(eventPlayer);
 }
 
 // Triggered on player death/kill, returns dying player, the killer, etc. Useful for updating scores, updating progression, handling any death/kill related logic.
@@ -547,9 +566,11 @@ export async function OnPlayerDamaged(
         eventWeaponUnlock
     };
 
-    q_manager
-        .updatePlayer(eventPlayer, QuestUpdateSource.OnPlayerReceivesDamage, ctx)
-        .catch(err => LogAdmin(STR.gameManagerDamageUpdateError, err));
+    try {
+        q_manager.updatePlayer(eventPlayer, QuestUpdateSource.OnPlayerReceivesDamage, ctx);
+    } catch (err) {
+        Log(STR.gameManagerDamageUpdateError, eventPlayer, err);
+    }
 }
 
 // Triggered when a player interacts with InteractPoint. Reference by using 'mod.GetObjId(InteractPoint);'.
@@ -583,7 +604,25 @@ export async function OnGameModeStarted(): Promise<void> {
     
     // mod.AllCapturePoints
     mod.SetGameModeTargetScore(1000);
-    mod.SetGameModeTimeLimit(20); // minutes
+    mod.SetGameModeTimeLimit(20 * 60); 
+
+    mod.SetSpawnMode(mod.SpawnModes.Deploy);
+    mod.AllObjectsOfType()
+
+    //todo replicate scoreboard
+    // todo replicate capture points ui and top team points bar 
+    // todo set map mode to replicate conquest
+
+    let currentMap = null;
+    for (const map of Object.values(mod.Maps)) {
+        // Ensure map is of type Maps before calling IsCurrentMap
+        if (typeof map !== "string" && mod.IsCurrentMap(map)) {
+            currentMap = map;
+            break;
+        }
+    }
+
+    // No player context available for map announcement; skipping log.
 
     const cps = ConvertArray(mod.AllCapturePoints()) as mod.CapturePoint[];
     for (const cp of cps) {
@@ -594,9 +633,12 @@ export async function OnGameModeStarted(): Promise<void> {
     // Adds X delay in seconds. Useful for making sure that everything has been initialized before running logic or delaying triggers.
     await mod.Wait(1);
 
-    await q_manager.init([
+    q_manager.init([
         { quest: SelfDamageQuestDefinition, scope: QuestScope.Game, ctx: {} }
     ]);
+
+    // Initialize quest UI for any already tracked players (if any)
+    try { refreshUIForAllPlayers(); } catch {}
 }
 
 
@@ -626,10 +668,190 @@ function MakeMessage(message: string, ...args: any[]) {
     }
 }
 
-function Log(message: string, player: mod.Player, ...args: any[]) {
-    mod.DisplayHighlightedWorldLogMessage(MakeMessage(message, ...args), player);
+function DebugMessage(message: string, ...args: any[]) {
+    mod.DisplayHighlightedWorldLogMessage(MakeMessage(message, ...args));
 }
 
-function LogAdmin(message: string, ...args: any[]) {
-    mod.SendErrorReport(MakeMessage(message, ...args));
+function Log(message: string, player: mod.Player, ...args: any[]) {
+    const messagestr = MakeMessage(message, ...args)
+    mod.DisplayHighlightedWorldLogMessage(messagestr, player);
+}
+
+/////////////////////// UI: Player Quest Panel //////////////////////////////
+
+type PlayerQuestUI = {
+    panel: mod.UIWidget;
+    title: mod.UIWidget;
+    desc: mod.UIWidget;
+    progress: mod.UIWidget;
+};
+
+const g_playerUIs: { [playerId: number]: PlayerQuestUI } = {};
+const g_activePlayers: mod.Player[] = [];
+let g_uiUniqueCounter = 1;
+
+function nextUiName(): string {
+    return "sq_ui_" + (g_uiUniqueCounter++);
+}
+
+function ensurePlayerTracked(player: mod.Player) {
+    const id = mod.GetObjId(player);
+    if (id < 0) return;
+    if (!g_activePlayers.some(p => mod.GetObjId(p) === id)) {
+        g_activePlayers.push(player);
+    }
+}
+
+function ensurePlayerQuestUI(player: mod.Player): PlayerQuestUI {
+    const id = mod.GetObjId(player);
+    if (g_playerUIs[id]) return g_playerUIs[id];
+
+    // Layout positions (TopLeft anchored)
+    const baseX = 30; // distance from left
+    const baseY = 120; // distance from top
+    const panelWidth = 420;
+    const panelHeight = 120;
+
+    // Panel background
+    const panelName = nextUiName();
+    mod.AddUIContainer(
+        panelName,
+        mod.CreateVector(baseX, baseY, 0),
+        mod.CreateVector(panelWidth, panelHeight, 0),
+        mod.UIAnchor.TopLeft,
+        player
+    );
+    const panel = mod.FindUIWidgetWithName(panelName) as mod.UIWidget;
+    mod.SetUIWidgetBgFill(panel, mod.UIBgFill.Blur);
+    mod.SetUIWidgetBgColor(panel, mod.CreateVector(0.08, 0.10, 0.14));
+    mod.SetUIWidgetBgAlpha(panel, 1);
+    mod.SetUIWidgetDepth(panel, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetPadding(panel, 4);
+    mod.SetUIWidgetVisible(panel, false);
+
+    // Title
+    const titleName = nextUiName();
+    mod.AddUIText(
+        titleName,
+        mod.CreateVector(baseX + 12, baseY + 18, 0),
+        mod.CreateVector(panelWidth - 24, 28, 0),
+        mod.UIAnchor.TopLeft,
+        MakeMessage(STR.empty),
+        player
+    );
+    const title = mod.FindUIWidgetWithName(titleName) as mod.UIWidget;
+    mod.SetUITextAnchor(title, mod.UIAnchor.CenterLeft);
+    mod.SetUITextSize(title, 22);
+    mod.SetUITextColor(title, mod.CreateVector(1, 1, 1));
+    mod.SetUIWidgetDepth(title, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetVisible(title, false);
+
+    // Description
+    const descName = nextUiName();
+    mod.AddUIText(
+        descName,
+        mod.CreateVector(baseX + 12, baseY + 52, 0),
+        mod.CreateVector(panelWidth - 24, 48, 0),
+        mod.UIAnchor.TopLeft,
+        MakeMessage(STR.empty),
+        player
+    );
+    const desc = mod.FindUIWidgetWithName(descName) as mod.UIWidget;
+    mod.SetUITextAnchor(desc, mod.UIAnchor.TopLeft);
+    mod.SetUITextSize(desc, 18);
+    mod.SetUITextColor(desc, mod.CreateVector(0.9, 0.95, 1));
+    mod.SetUIWidgetDepth(desc, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetVisible(desc, false);
+
+    // Progress line
+    const progName = nextUiName();
+    mod.AddUIText(
+        progName,
+        mod.CreateVector(baseX + 12, baseY + 98, 0),
+        mod.CreateVector(panelWidth - 24, 20, 0),
+        mod.UIAnchor.TopLeft,
+        MakeMessage(STR.empty),
+        player
+    );
+    const progress = mod.FindUIWidgetWithName(progName) as mod.UIWidget;
+    mod.SetUITextAnchor(progress, mod.UIAnchor.CenterLeft);
+    mod.SetUITextSize(progress, 18);
+    mod.SetUITextColor(progress, mod.CreateVector(0.8, 0.9, 1));
+    mod.SetUIWidgetDepth(progress, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetVisible(progress, false);
+
+    const ui: PlayerQuestUI = { panel, title, desc, progress };
+    g_playerUIs[id] = ui;
+    return ui;
+}
+
+function hidePlayerQuestUI(player: mod.Player) {
+    const id = mod.GetObjId(player);
+    const ui = g_playerUIs[id];
+    if (!ui) return;
+    mod.SetUIWidgetVisible(ui.panel, false);
+    mod.SetUIWidgetVisible(ui.title, false);
+    mod.SetUIWidgetVisible(ui.desc, false);
+    mod.SetUIWidgetVisible(ui.progress, false);
+}
+
+function refreshUIForPlayer(player: mod.Player) {
+    const id = mod.GetObjId(player);
+    if (id < 0) return;
+    const ui = ensurePlayerQuestUI(player);
+    const quest = q_manager.getRelevantQuestForPlayer(player);
+
+    if (!quest) {
+        hidePlayerQuestUI(player);
+        return;
+    }
+
+    const prog = quest.currentProgress ?? new QuestProgress(quest.quest.defaultTarget ?? 1);
+    // Title and description use string keys already, so wrap with MakeMessage
+    mod.SetUITextLabel(ui.title, MakeMessage(quest.quest.name));
+    mod.SetUITextLabel(ui.desc, MakeMessage(quest.quest.description));
+    mod.SetUITextLabel(ui.progress, MakeMessage(STR.progress, prog.current, prog.target, prog.percent));
+
+    mod.SetUIWidgetVisible(ui.panel, true);
+    mod.SetUIWidgetVisible(ui.title, true);
+    mod.SetUIWidgetVisible(ui.desc, true);
+    mod.SetUIWidgetVisible(ui.progress, true);
+}
+
+function refreshUIForAllPlayers() {
+    for (const p of g_activePlayers) {
+        refreshUIForPlayer(p);
+    }
+}
+
+function playersMatchingQuest(questInstance: QuestInstance): mod.Player[] {
+    const players: mod.Player[] = [];
+    if (questInstance.scope === QuestScope.Game) {
+        return [...g_activePlayers];
+    }
+    if (questInstance.scope === QuestScope.Player && questInstance.player) {
+        const pid = mod.GetObjId(questInstance.player);
+        const p = g_activePlayers.find(x => mod.GetObjId(x) === pid);
+        return p ? [p] : [];
+    }
+    if (questInstance.scope === QuestScope.Team && questInstance.team) {
+        for (const p of g_activePlayers) {
+            if (mod.GetTeam(p) === questInstance.team) players.push(p);
+        }
+        return players;
+    }
+    if (questInstance.scope === QuestScope.Squad && questInstance.squad) {
+        const getSquad = (mod as any).GetSquad as undefined | ((pl: mod.Player) => mod.Squad);
+        if (!getSquad) return players; // unknown API; nothing to do
+        for (const p of g_activePlayers) {
+            if (getSquad(p) === questInstance.squad) players.push(p);
+        }
+        return players;
+    }
+    return players;
+}
+
+function RefreshUIForQuestScope(questInstance: QuestInstance) {
+    const targets = playersMatchingQuest(questInstance);
+    for (const p of targets) refreshUIForPlayer(p);
 }

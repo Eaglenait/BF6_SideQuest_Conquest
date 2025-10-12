@@ -26,6 +26,12 @@
   "questCompletedNotification": "Quest Completed: {}",
   "playerWelcomeMessage": "Welcome!",
   "gameManagerPlayerDeployedLog": "[GameManager] Player deployed: {}",
-  "gameManagerDamageUpdateError": "[GameManager] Failed to update quests for damage event:",
-  "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager."
+  "gameManagerDamageUpdateError": "[GameManager] Failed to update quests for damage event: {0}",
+  "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager.",
+  "empty": "",
+  "progress": "{0}/{1} ({2}%)",
+  "questDebugUpdateCall": "[Quest] Calling update for {0}",
+  "questDebugUpdateReturn": "[Quest] Update returned {0}"
+
+
 }
