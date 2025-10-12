@@ -1,0 +1,16 @@
+{
+  "name": "sidequest-conquest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "bundle": "node build.cjs",
+    "build": "npm run typecheck && npm run bundle",
+    "watch": "node build.cjs --watch",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.3"
+  }
+}
