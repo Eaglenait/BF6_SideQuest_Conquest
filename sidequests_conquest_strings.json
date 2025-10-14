@@ -1,6 +1,8 @@
 {
+  "empty": "",
+  "len": "{0} elems",
   "questManagerInitializing": "[QuestManager] Initializing quest manager.",
-  "questManagerRegisterQuest": "[QuestManager] Register quest '{}' with scope {}",
+  "questManagerRegisterQuest": "[QuestManager] Register quest '{}' with scope {} for player {}",
   "questManagerOnStartError": "[QuestManager] Failed to run onStart for quest '{}':",
   "questManagerUnregisterQuest": "[QuestManager] Unregister quest '{}' (Instance #{}).",
   "questManagerResetPlayer": "[QuestManager] Resetting quests for player {}.",
@@ -9,29 +11,120 @@
   "questManagerUpdateError": "[QuestManager] Error updating quest '{}' (Instance #{}):",
   "questManagerQuestCompleted": "[QuestManager] Quest '{}' completed (Instance #{}).",
   "questManagerOnCompleteError": "[QuestManager] Failed to run onComplete for quest '{}':",
-  "selfDamageQuestStartedLog": "[SelfDamageQuest] Quest started. Awaiting self-damage event.",
-  "selfDamageQuestCompletedLog": "[SelfDamageQuest] Quest completed by player {}. Restarting quest for continued testing.",
-  "selfDamageQuestRestartError": "[SelfDamageQuest] Failed to restart quest:",
-  "selfDamageQuestUpdateNoPlayer": "[SelfDamageQuest] Update called without eventPlayer. Ignoring.",
-  "selfDamageQuestNotSelfDamage": "[SelfDamageQuest] Damage event ignored (not self-inflicted). Player: {}.",
-  "selfDamageQuestProgressLog": "[SelfDamageQuest] Self damage detected for player {}. Progress: {}/{}.",
-  "selfDamageQuestName": "Self-Inflicted Systems Test",
-  "selfDamageQuestDescription": "Deal damage to yourself to verify quest flow.",
-  "firstBloodQuestName": "First Blood",
-  "firstBloodQuestDescription": "Achieve the first kill",
-  "pistolQuestName": "Kill using pistol",
-  "pistolQuestDescription": "Achieve 10 kills using pistols",
   "questStartedNotification": "Quest Started: {}",
   "questProgressNotification": "Quest Progress: {} {}%",
   "questCompletedNotification": "Quest Completed: {}",
   "playerWelcomeMessage": "Welcome!",
   "gameManagerPlayerDeployedLog": "[GameManager] Player deployed: {}",
-  "gameManagerDamageUpdateError": "[GameManager] Failed to update quests for damage event: {0}",
   "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager.",
-  "empty": "",
-  "progress": "{0}/{1} ({2}%)",
-  "questDebugUpdateCall": "[Quest] Calling update for {0}",
-  "questDebugUpdateReturn": "[Quest] Update returned {0}"
+  "gameManagerKillUpdateError": "[GameManager] [Error] Update player OnPlayerEarnedKill player:{} - error: {}",
+  "progress": "{}/{} ({}%)",
+  "questDebugUpdateCall": "[Quest] Calling update for {}",
+  "questDebugUpdateReturn": "[Quest] Update returned {}",
+  
+  "selfQuestTitle":"Personal Quest",
+  "squadQuestTitle":"Squad Quest",
+  "teamQuestTitle":"Team Quest",
+  "globalQuestTitle":"Global Quest",
 
+  "logging": {
+    "repeat_count": "{}x ",
+    "log_info_prefix": "[Info] ",
+    "log_warning_prefix": "[Warning] ",
+    "log_error_prefix": "[Error] "
+  },
+  "debug": {
+    "pistolKillsQuestDebug": "[Debug] pistol quest update weapon:{}",
+    "playerDamageTest": "[Debug] eventPlayer {} damaged by eventOtherPlayer {} with damageType {}",
+    "applyPerk": "[Debug] applying perk {} to player {}"
 
+  },
+  "errors": {
+    "gameManager": {
+      "questUpdateCallError": "Error whle calling update for the quest '{}': {}",
+      "damageUpdateError": "[GameManager] [Error] Update player OnPlayerDamaged player:{} - error: {}",
+      "perkApplyError": "[GameManager] [Error] Apply perk {} to player {} - error: {}"
+    }
+  },
+  "quests": {
+    "firstBloodQuest": {
+      "name": "First Blood",
+      "description": "Achieve the first kill"
+    },
+    "pistolKillsQuest": {
+      "name": "Kills using pistols",
+      "description": "Achieve 10 kills using pistols"
+    },
+    "shotgunKillsQuest": {
+      "name": "Kills using shotguns",
+      "description": "Achieve 10 kills using shotguns"
+    },
+    "arKillsQuest": {
+      "name": "Kills using assault rifles",
+      "description": "Achieve 10 kills using assault rifles"
+    },
+    "sniperKillsQuest": {
+      "name": "Kills using sniper rifles",
+      "description": "Achieve 10 kills using sniper rifles"
+    },
+    "smgKillsQuest": {
+      "name": "Kills using SMGs",
+      "description": "Achieve 10 kills using SMGs"
+    },
+    "lmgKillsQuest": {
+      "name": "Kills using LMGs",
+      "description": "Achieve 10 kills using LMGs"
+    },
+    "explosiveKillsQuest": {
+      "name": "Kills using explosives",
+      "description": "Achieve 10 kills using explosives"
+    },
+    "headshotKillsQuest": {
+      "name": "Headshot kills",
+      "description": "Achieve 10 headshot kills"
+    },
+    "meleeKillsQuest": {
+      "name": "Melee kills",
+      "description": "Achieve 10 melee kills"
+    }
+
+  },
+  "perks": {
+    "speedBoost": {
+      "name": "Speed Boost",
+      "description": "Increases your movement speed."
+    },
+    "extraHealth": {
+      "name": "Extra Health",
+      "description": "Increases your maximum health."
+    },
+    "quickReload": {
+      "name": "Quick Reload",
+      "description": "Decreases your weapon reload time."
+    },
+    "extraAmmo": {
+      "name": "Extra Ammo",
+      "description": "Increases your ammo capacity."
+    },
+    "fastHeal": {
+      "name": "Fast Heal",
+      "description": "Increases your health regeneration rate."
+    },
+    "armor": {
+      "name": "Armor Plates",
+      "description": "Personal armor plates that absorb damage."
+    },
+    "artilleryBarrage": {
+      "name": "Artillery Barrage",
+      "description": "Call in an artillery barrage at a targeted location."
+    },
+    "mortarStrike": {
+      "name": "Mortar Strike",
+      "description": "Call in a mortar strike at a targeted location."
+    },
+    "artillerySmoke": {
+      "name": "Artillery Smoke",
+      "description": "Deploy a smoke screen at a targeted location."
+    }
+  }
 }

@@ -1,4 +1,9 @@
-////////////////////////////////// Models //////////////////////////////////
+import * as modlib from "modlib";
+
+//////////////////////////////////////////////////////////////////////////////
+////////////////////////////////// MODELS //////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
 enum QuestState_Enum {
     NotStarted,
     InProgress,
@@ -13,8 +18,10 @@ interface QuestContext {
     eventTeam?: mod.Team;
     eventOtherPlayer?: mod.Player;
     eventDamageType?: mod.DamageType;
+    eventDeathType?: mod.DeathType;
     eventWeaponUnlock?: mod.WeaponUnlock;
     progress?: QuestProgress;
+    //need to be nullable to mark that it might be null before being enriched in the manager
     questInstance?: QuestInstance;
     updateSource?: QuestUpdateSource;
     perkInstance?: PerkInstance;
@@ -31,7 +38,7 @@ class QuestProgress {
         return Math.round(Math.min(1, this.current / this.target) * 100);
     }
 
-    constructor (target: number, current: number = 0) {
+    constructor (target: number = 1, current: number = 0) {
         this.target = target;
         this.current = current;
     }
@@ -43,7 +50,8 @@ interface QuestUpdateResult extends QuestProgress {
 }
 const defaultUpdateResult: QuestUpdateResult = { current: 0, target: 1, percent: 0, state: QuestState_Enum.NotStarted, nextState: QuestState_Enum.NotStarted};
 
-type PerkApply = (ctx: PerkContext) => Promise<void> | void;
+/** Type to represent a method that applies a perk to a quest scope (player, squad, team) */
+type PerkApply = (ctx: PerkContext) => void;
 
 interface PerkContext extends QuestContext {
     targets?: mod.Player[];
@@ -91,6 +99,8 @@ enum QuestUpdateSource {
     OnPlayerEnterZone,
     OnRevived,
 }
+
+  const BATTLEFIELD_GREY = [0.616, 0.635, 0.647];
 
 enum QuestFailReason {
     TimeExpired,
@@ -203,8 +213,9 @@ class QuestManager {
     registerQuest(questDef: QuestDefinition, scope: QuestScope, ctx: QuestContext): QuestInstance {
         const questInstance = new QuestInstance(questDef, scope, ctx);
         if (ctx.eventPlayer) {
-            Log(STR.questManagerRegisterQuest, ctx.eventPlayer, questDef.name, QuestScope[scope]);
+            Log(STR.questManagerRegisterQuest, ctx.eventPlayer, questDef.name, QuestScope[scope], ctx.eventPlayer);
         }
+
 
         if (!questDef.disableRandomPerk) {
             const perkInstance = this.pickPerkForQuest(questInstance);
@@ -243,8 +254,6 @@ class QuestManager {
     }
 
     unregisterQuest(questInstance: QuestInstance) {
-        // No reliable player context here; skipping log.
-
         if (questInstance.scope === QuestScope.Game) {
             if (this.activeGlobalQuest?.id === questInstance.id) {
                 this.activeGlobalQuest = undefined;
@@ -257,7 +266,7 @@ class QuestManager {
 
     resetPlayer(player: mod.Player) {
         Log(STR.questManagerResetPlayer, player, player);
-        this.activeQuests = this.activeQuests.filter(instance => instance.player !== player);
+        this.activeQuests = this.activeQuests.filter(instance => instance.player && mod.GetObjId(instance.player) !== mod.GetObjId(player));
     }
 
     playerJoined(player: mod.Player) {
@@ -373,17 +382,10 @@ class QuestManager {
                 targets: recipients
             };
             try {
-                const result = questInstance.perkInstance.apply(perkCtx);
-                if (isPromiseLike(result)) {
-                    Promise.resolve(result).catch((error: unknown) => {
-                        if (perkCtx.eventPlayer) {
-                            DebugMessage("Perk application failed: %1", error);
-                        }
-                    });
-                }
+                questInstance.perkInstance.apply(perkCtx);
             } catch (err: unknown) {
                 if (perkCtx.eventPlayer) {
-                    DebugMessage("Perk application failed: %1", err);
+                    Log(STR.errors.perkApplyError, perkCtx.eventPlayer, perkCtx.perkInstance?.definition.name, perkCtx.eventPlayer, err);
                 }
             }
         }
@@ -402,11 +404,11 @@ class QuestManager {
                 }
             }
         }
-
     }
 
     private getPlayerQuests(player: mod.Player): QuestInstance[] {
-        return this.activeQuests.filter(quest => quest.player === player);
+        const pId = mod.GetObjId(player);
+        return this.activeQuests.filter(quest => quest.player && mod.GetObjId(quest.player) === pId);
     }
 
     private getSquadQuests(squad: mod.Squad): QuestInstance[] {
@@ -434,7 +436,9 @@ class QuestManager {
 
     private notifyQuestStart(questInstance: QuestInstance) {
         // Refresh UI for all players impacted by this quest start
-        try { RefreshUIForQuestScope(questInstance); } catch {}
+        try {
+            RefreshUIForQuestScope(questInstance);
+        } catch { }
     }
 
     private notifyQuestProgress(questInstance: QuestInstance, ctx: QuestContext, previousPercent: number, nextPercent: number) {
@@ -448,7 +452,9 @@ class QuestManager {
         }
 
         // Update UI for all players impacted by this quest
-        try { RefreshUIForQuestScope(questInstance); } catch {}
+        try {
+            RefreshUIForQuestScope(questInstance);
+        } catch { }
     }
 
     private notifyQuestCompletion(questInstance: QuestInstance, ctx: QuestContext) {
@@ -457,68 +463,122 @@ class QuestManager {
         }
 
         // Update UI for all players that were seeing this quest
-        try { RefreshUIForQuestScope(questInstance); } catch {}
+        try { 
+            RefreshUIForQuestScope(questInstance); 
+        } catch { }
     }
-    // broadcastQuestMessage removed per simplified logging policy.
 
-    /** Returns the most relevant quest for a given player, prioritizing Player > Squad > Team > Game */
-    getRelevantQuestForPlayer(player: mod.Player): QuestInstance | undefined {
-        // Player-scoped
-        const playerQuest = this.activeQuests.find(q => q.scope === QuestScope.Player && q.player && mod.GetObjId(q.player) === mod.GetObjId(player));
-        if (playerQuest) return playerQuest;
+    getPlayerQuest(player: mod.Player): QuestInstance | undefined {
+        const pid = mod.GetObjId(player);
+        if (pid < 0) return undefined;
+        return this.activeQuests.find(q => q.scope === QuestScope.Player && q.player && mod.GetObjId(q.player) === pid);
+    }
 
-        // Squad-scoped
-        const getSquad = (mod as any).GetSquad as undefined | ((p: mod.Player) => mod.Squad);
-        const playerSquad = getSquad ? getSquad(player) : undefined;
-        if (playerSquad) {
-            const squadQuest = this.activeQuests.find(q => q.scope === QuestScope.Squad && q.squad && q.squad === playerSquad);
-            if (squadQuest) return squadQuest;
-        }
+    getSquadQuest(squad: mod.Squad): QuestInstance | undefined {
+        return this.activeQuests.find(q => q.scope === QuestScope.Squad && q.squad === squad);
+    }
 
-        // Team-scoped
-        const playerTeam = mod.GetTeam(player);
-        const teamQuest = this.activeQuests.find(q => q.scope === QuestScope.Team && q.team && q.team === playerTeam);
-        if (teamQuest) return teamQuest;
+    getTeamQuest(team: mod.Team): QuestInstance | undefined {
+        return this.activeQuests.find(q => q.scope === QuestScope.Team && q.team === team);
+    }
 
-        // Global
-        if (this.activeGlobalQuest) return this.activeGlobalQuest;
+    getGlobalQuest(): QuestInstance | undefined {
+        return this.activeGlobalQuest;
+    }
 
-        return undefined;
+    hasPlayerQuest(player: mod.Player): boolean {
+        return !!this.getPlayerQuest(player);
     }
 }
 
+type QuestScopeWidgets = {
+    panel: mod.UIWidget;
+    title: mod.UIWidget;
+    quest_title: mod.UIWidget;
+    desc: mod.UIWidget;
+    progress: mod.UIWidget;
+};
 
-////////////////////////////////// Data //////////////////////////////////
+type PlayerQuestUI = {
+    widgets: Partial<Record<QuestScope, QuestScopeWidgets>>;
+};
 
-var q_manager = new QuestManager();
-
-var requiredPlayersToStart: number = 4;
-var gameStartCountdown: number = 60;
+///////////////////////////////// MODEL END //////////////////////////////////
 
 
-/** Implementation of all available quests */
-var QuestRegistry: QuestDefinition[] = [
-    {
-        name: STR.quests.firstBloodQuest.name,
-        description: STR.quests.firstBloodQuest.description,
-        availableScope: [QuestScope.Game],
-        updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
-        update: upd_FirstKill
+//////////////////////////////////////////////////////////////////////////////
+///////////////////////// Game Variables Data ////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
+
+//ALL QUESTS DEFINITIONS
+const firstBlood_Quest: QuestDefinition = {
+    name: STR.quests.firstBloodQuest.name,
+    description: STR.quests.firstBloodQuest.description,
+    availableScope: [QuestScope.Game],
+    updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
+    update: (ctx: QuestContext) => {
+        if (!ctx.questInstance) {
+            Log(STR.errors.questInstanceError, ctx.eventPlayer);
+            return defaultUpdateResult;
+        }
+
+        const progress = ctx.questInstance.currentProgress;
+        progress.current = progress.target;
+        progress.state = QuestState_Enum.Completed;
+
+        return {
+            current: progress.current,
+            target: progress.target,
+            state: progress.state,
+            nextState: QuestState_Enum.Completed,
+            percent: progress.percent
+        };
     },
-    {
-        name: STR.quests.pistolKillsQuest.name,
-        description: STR.quests.pistolKillsQuest.description,
-        availableScope: AllQuestScopes,
-        updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
-        update: upd_PistolKills
+    onComplete: (ctx: QuestContext) => {
+        // DebugMessage(STR.debug.applyPerk, ctx.questInstance?.perkInstance?.definition.name, ctx.eventPlayer);
+        Log(STR.debug.applyPerk, ctx.eventPlayer, ctx.questInstance?.perkInstance?.definition.name, ctx.eventPlayer);
+        ctx.questInstance?.perkInstance?.apply(ctx);
+    },
+};
+
+const pistolKills_Quest: QuestDefinition = {
+    name: STR.quests.pistolKillsQuest.name,
+    description: STR.quests.pistolKillsQuest.description,
+    availableScope: AllQuestScopes,
+    defaultTarget: 10,
+    updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
+    update: (ctx: QuestContext) => {
+        Log(STR.debug.pistolKillsQuestDebug, ctx.eventPlayer, ctx.eventWeaponUnlock);
+        if (!ctx.questInstance) {
+            return defaultUpdateResult;
+        }
+
+        const progress = ctx.questInstance.currentProgress;
+
+        if (progress.state === QuestState_Enum.Completed) {
+            return toQuestUpdateResult(progress, QuestState_Enum.Completed);
+        }
+
+        if (!isPistolWeapon(ctx.eventWeaponUnlock)) {
+            return toQuestUpdateResult(progress);
+        }
+
+        progress.current = Math.min(progress.target, progress.current + 1);
+
+        const completed = progress.current >= progress.target;
+        if (completed) {
+            progress.state = QuestState_Enum.Completed;
+        }
+
+        return toQuestUpdateResult(progress, completed ? QuestState_Enum.Completed : undefined);
+    },
+    onComplete: (ctx: QuestContext) => {
+        Log(STR.playerWelcomeMessage, ctx.eventPlayer);
     }
-];
+};
+//END - ALL QUESTS DEFINITIONS
 
-//-- Perks
-
-const SPEED_BOOST_MULTIPLIER = 1.5;
-const SPEED_BOOST_DURATION_SECONDS = 20;
-
+//ALL PERKS DEFINITIONS
 const SpeedBoostPerkDefinition: PerkDefinition = {
     name: STR.perks.speedBoost.name,
     description: STR.perks.speedBoost.description,
@@ -534,13 +594,106 @@ const SpeedBoostPerkDefinition: PerkDefinition = {
             }
 
             for (const target of recipients) {
-                void applyTemporarySpeedMultiplier(target, SPEED_BOOST_MULTIPLIER, SPEED_BOOST_DURATION_SECONDS);
+                void applyTemporarySpeedMultiplier(target, 1.5, 20);
             }
         }
     })
 };
 
-const PerkRegistry: PerkDefinition[] = [SpeedBoostPerkDefinition];
+//END - ALL PERKS DEFINITIONS
+
+/** All available perks */
+const PerkRegistry: PerkDefinition[] = [
+    SpeedBoostPerkDefinition
+];
+
+/** All available quests */
+var QuestRegistry: QuestDefinition[] = [
+    firstBlood_Quest,
+    pistolKills_Quest
+];
+
+var q_manager = new QuestManager();
+
+const g_playerUIs: { [playerId: number]: PlayerQuestUI } = {};
+const g_activePlayers: mod.Player[] = [];
+let g_uiUniqueCounter = 1;
+
+const QUEST_SCOPE_ORDER: QuestScope[] = [QuestScope.Player, QuestScope.Squad, QuestScope.Team, QuestScope.Game];
+const QUEST_BASE_X = 50;
+const QUEST_BASE_Y = 120;
+const QUEST_PANEL_WIDTH = 420;
+const QUEST_PANEL_HEIGHT = 120;
+const QUEST_PANEL_SPACING_Y = 12;
+const LINE_HEIGHT = 18;
+
+///////////////////////////////// GAME VARIABLE DATA END //////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////// GAME FUNCTIONS //////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////
+
+/** Get all players matching the quest instance's scope */
+function playersMatchingQuest(questInstance: QuestInstance): mod.Player[] {
+    const players: mod.Player[] = [];
+    if (questInstance.scope === QuestScope.Game) {
+        return [...g_activePlayers];
+    }
+    if (questInstance.scope === QuestScope.Player && questInstance.player) {
+        const pid = mod.GetObjId(questInstance.player);
+        const p = g_activePlayers.find(x => mod.GetObjId(x) === pid);
+        return p ? [p] : [];
+    }
+    if (questInstance.scope === QuestScope.Team && questInstance.team) {
+        for (const p of g_activePlayers) {
+            if (mod.GetTeam(p) === questInstance.team) players.push(p);
+        }
+        return players;
+    }
+    if (questInstance.scope === QuestScope.Squad && questInstance.squad) {
+        const getSquad = (mod as any).GetSquad as undefined | ((pl: mod.Player) => mod.Squad);
+        if (!getSquad) return players; // unknown API; nothing to do
+        for (const p of g_activePlayers) {
+            if (getSquad(p) === questInstance.squad) players.push(p);
+        }
+        return players;
+    }
+    return players;
+}
+
+/** Assign a random quest to the player */
+function assignRandomQuestToPlayer(player: mod.Player) {
+    if (!player || q_manager.hasPlayerQuest(player) || isPlayerAi(player)) {
+        return;
+    }
+
+    const quest = pickRandomQuestForScope(QuestScope.Player);
+    if (!quest) {
+        return;
+    }
+
+    q_manager.registerQuest(quest, QuestScope.Player, { eventPlayer: player });
+}
+
+//** Checks if the passed weapon is a pistol */
+function isPistolWeapon(weapon?: mod.WeaponUnlock): boolean {
+    if (!weapon) {
+        return false;
+    }
+
+    const weaponName = String(weapon);
+    return weaponName.startsWith("Sidearm_");
+}
+
+
+function ensurePlayerTracked(player: mod.Player) {
+    const id = mod.GetObjId(player);
+    if (id < 0) return;
+    if (!g_activePlayers.some(p => mod.GetObjId(p) === id)) {
+        g_activePlayers.push(player);
+    }
+}
 
 function pickWeightedPerk(definitions: PerkDefinition[]): PerkDefinition {
     const totalWeight = definitions.reduce((sum, def) => sum + (def.randomWeight ?? 1), 0);
@@ -554,13 +707,10 @@ function pickWeightedPerk(definitions: PerkDefinition[]): PerkDefinition {
     return definitions[definitions.length - 1];
 }
 
-function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-    return !!value && typeof (value as PromiseLike<T>).then === "function";
-}
 
+//--to review
 const g_playerSpeedTokens: { [playerId: number]: number } = {};
 let g_nextSpeedToken = 1;
-
 async function applyTemporarySpeedMultiplier(player: mod.Player, multiplier: number, durationSeconds: number): Promise<void> {
     if (!player) {
         return;
@@ -587,16 +737,12 @@ async function applyTemporarySpeedMultiplier(player: mod.Player, multiplier: num
     }
 }
 
-function upd_FirstKill(ctx: QuestContext): QuestUpdateResult {
-    return defaultUpdateResult;
-}
+///////////////////////////////// GAME FUNCTIONS END //////////////////////////////////
 
-function upd_PistolKills(ctx: QuestContext): QuestUpdateResult {
-    //todo
-    return defaultUpdateResult;
-}
 
-////////////////////////////////// PLAYER EVENTS ///////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////// GAME HOOKS //////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////
 
 // Triggered when player joins the game
 export async function OnPlayerJoinGame(eventPlayer: mod.Player): Promise<void> {
@@ -609,9 +755,8 @@ export async function OnPlayerLeaveGame(eventNumber: number): Promise<void> {
     const idx = g_activePlayers.findIndex(p => mod.GetObjId(p) === eventNumber);
     if (idx !== -1) {
         const player = g_activePlayers[idx];
-        hidePlayerQuestUI(player);
         g_activePlayers.splice(idx, 1);
-        delete g_playerUIs[eventNumber];
+        destroyPlayerQuestUI(player);
     }
 }
 
@@ -620,6 +765,7 @@ export async function OnPlayerDeployed(eventPlayer: mod.Player): Promise<void> {
     Log(STR.gameManagerPlayerDeployedLog, eventPlayer);
     ensurePlayerTracked(eventPlayer);
     ensurePlayerQuestUI(eventPlayer);
+    assignRandomQuestToPlayer(eventPlayer);
     refreshUIForPlayer(eventPlayer);
 }
 
@@ -632,7 +778,22 @@ export async function OnPlayerEarnedKill(
     eventOtherPlayer: mod.Player,
     eventDeathType: mod.DeathType,
     eventWeaponUnlock: mod.WeaponUnlock
-): Promise<void> {}
+): Promise<void> {
+    Log(STR.debug.onPlayerEarnedKill, eventPlayer);
+    Log(STR.debug.onPlayerEarnedKill, eventOtherPlayer);
+    try {
+        const ctx: QuestContext = {
+            eventPlayer,
+            eventOtherPlayer,
+            eventDeathType,
+            eventWeaponUnlock
+        };
+        q_manager.updatePlayer(eventPlayer, QuestUpdateSource.OnPlayerEarnedKill, ctx);
+    }
+    catch (err) {
+        Log(STR.gameManagerKillUpdateError, eventPlayer, eventPlayer, err);
+    }
+}
 
 // Triggered when a player is damaged, returns same variables as OnPlayerDied. 
 export async function OnPlayerDamaged(
@@ -648,10 +809,12 @@ export async function OnPlayerDamaged(
         eventWeaponUnlock
     };
 
+    Log(STR.debug.playerDamageTest, eventPlayer, eventOtherPlayer, eventDamageType);
+
     try {
         q_manager.updatePlayer(eventPlayer, QuestUpdateSource.OnPlayerReceivesDamage, ctx);
     } catch (err) {
-        Log(STR.gameManagerDamageUpdateError, eventPlayer, err);
+        Log(STR.errors.gameManager.damageUpdateError, eventPlayer, eventPlayer, err);
     }
 }
 
@@ -672,8 +835,6 @@ export async function OnPlayerExitAreaTrigger(eventPlayer: mod.Player, eventArea
 
 export async function OnPlayerSwitchTeam(eventPlayer: mod.Player, eventTeam: mod.Team): Promise<void> {
 }
-
-/////////////////////// GAMEMODE EVENTS //////////////////////////////
 
 export async function OnGameModeEnding(): Promise<void> {}
 
@@ -719,12 +880,23 @@ export async function OnGameModeStarted(): Promise<void> {
         { quest: QuestRegistry[0], scope: QuestScope.Game, ctx: {} }
     ]);
 
+    for (const player of g_activePlayers) {
+        assignRandomQuestToPlayer(player);
+    }
+
     // Initialize quest UI for any already tracked players (if any)
     try { refreshUIForAllPlayers(); } catch {}
 }
+/////////////////////// GAME HOOKS END //////////////////////////////
 
 
+//////////////////////////////////////////////////////////
 /////////////////////// LIB //////////////////////////////
+//////////////////////////////////////////////////////////
+
+function isPlayerAi(player: mod.Player): boolean {
+    return mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier) == true;
+}
 
 function ConvertArray(array: mod.Array): any[] {
     let v = [];
@@ -751,118 +923,97 @@ function MakeMessage(message: string, ...args: any[]) {
 }
 
 function DebugMessage(message: string, ...args: any[]) {
-    mod.DisplayHighlightedWorldLogMessage(MakeMessage(message, ...args));
+    const formattedMessage = MakeMessage(message, ...args);
+    mod.DisplayHighlightedWorldLogMessage(formattedMessage);
 }
 
-function Log(message: string, player: mod.Player, ...args: any[]) {
-    const messagestr = MakeMessage(message, ...args)
-    mod.DisplayHighlightedWorldLogMessage(messagestr, player);
+function Log(message: string, player: mod.Player | undefined, ...args: any[]) {
+    const formattedMessage = MakeMessage(message, ...args);
+    if (player)
+        mod.DisplayHighlightedWorldLogMessage(formattedMessage, player);
 }
+
+export function getPlayersInTeam(team: mod.Team) {
+    const allPlayers = mod.AllPlayers();
+    const n = mod.CountOf(allPlayers);
+    let teamMembers = [];
+
+    for (let i = 0; i < n; i++) {
+        let player = mod.ValueInArray(allPlayers, i) as mod.Player;
+        if (mod.GetTeam(player) == team) {
+            teamMembers.push(player);
+        }
+    }
+    return teamMembers;
+}
+
+function toQuestUpdateResult(progress: QuestProgress, nextState?: QuestState_Enum): QuestUpdateResult {
+    return {
+        current: progress.current,
+        target: progress.target,
+        state: progress.state,
+        percent: progress.percent,
+        nextState
+    };
+}
+
 
 /////////////////////// UI: Player Quest Panel //////////////////////////////
 
-type PlayerQuestUI = {
-    panel: mod.UIWidget;
-    title: mod.UIWidget;
-    desc: mod.UIWidget;
-    progress: mod.UIWidget;
-};
 
-const g_playerUIs: { [playerId: number]: PlayerQuestUI } = {};
-const g_activePlayers: mod.Player[] = [];
-let g_uiUniqueCounter = 1;
 
 function nextUiName(): string {
     return "sq_ui_" + (g_uiUniqueCounter++);
 }
 
-function ensurePlayerTracked(player: mod.Player) {
+
+function destroyPlayerQuestUI(player: mod.Player) {
     const id = mod.GetObjId(player);
-    if (id < 0) return;
-    if (!g_activePlayers.some(p => mod.GetObjId(p) === id)) {
-        g_activePlayers.push(player);
+    const existing = g_playerUIs[id];
+    if (!existing) return;
+
+    for (const scope of QUEST_SCOPE_ORDER) {
+        const widgets = existing.widgets[scope];
+        if (!widgets) continue;
+
+        try {
+            mod.DeleteUIWidget(widgets.panel);
+        } catch { }
     }
+
+    delete g_playerUIs[id];
 }
 
 function ensurePlayerQuestUI(player: mod.Player): PlayerQuestUI {
     const id = mod.GetObjId(player);
-    if (g_playerUIs[id]) return g_playerUIs[id];
+    const existing = g_playerUIs[id];
 
-    // Layout positions (TopLeft anchored)
-    const baseX = 30; // distance from left
-    const baseY = 120; // distance from top
-    const panelWidth = 420;
-    const panelHeight = 120;
+    if (existing) {
+        let requiresUpgrade = false;
+        for (const scope of QUEST_SCOPE_ORDER) {
+            const widgets = existing.widgets[scope];
+            if (!widgets) continue;
+            if (!widgets.quest_title) {
+                requiresUpgrade = true;
+                break;
+            }
+        }
 
-    // Panel background
-    const panelName = nextUiName();
-    mod.AddUIContainer(
-        panelName,
-        mod.CreateVector(baseX, baseY, 0),
-        mod.CreateVector(panelWidth, panelHeight, 0),
-        mod.UIAnchor.TopLeft,
-        player
-    );
-    const panel = mod.FindUIWidgetWithName(panelName) as mod.UIWidget;
-    mod.SetUIWidgetBgFill(panel, mod.UIBgFill.Blur);
-    mod.SetUIWidgetBgColor(panel, mod.CreateVector(0.08, 0.10, 0.14));
-    mod.SetUIWidgetBgAlpha(panel, 1);
-    mod.SetUIWidgetDepth(panel, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetPadding(panel, 4);
-    mod.SetUIWidgetVisible(panel, false);
+        if (!requiresUpgrade) {
+            return existing;
+        }
 
-    // Title
-    const titleName = nextUiName();
-    mod.AddUIText(
-        titleName,
-        mod.CreateVector(baseX + 12, baseY + 18, 0),
-        mod.CreateVector(panelWidth - 24, 28, 0),
-        mod.UIAnchor.TopLeft,
-        MakeMessage(STR.empty),
-        player
-    );
-    const title = mod.FindUIWidgetWithName(titleName) as mod.UIWidget;
-    mod.SetUITextAnchor(title, mod.UIAnchor.CenterLeft);
-    mod.SetUITextSize(title, 22);
-    mod.SetUITextColor(title, mod.CreateVector(1, 1, 1));
-    mod.SetUIWidgetDepth(title, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetVisible(title, false);
+        destroyPlayerQuestUI(player);
+    }
 
-    // Description
-    const descName = nextUiName();
-    mod.AddUIText(
-        descName,
-        mod.CreateVector(baseX + 12, baseY + 52, 0),
-        mod.CreateVector(panelWidth - 24, 48, 0),
-        mod.UIAnchor.TopLeft,
-        MakeMessage(STR.empty),
-        player
-    );
-    const desc = mod.FindUIWidgetWithName(descName) as mod.UIWidget;
-    mod.SetUITextAnchor(desc, mod.UIAnchor.TopLeft);
-    mod.SetUITextSize(desc, 18);
-    mod.SetUITextColor(desc, mod.CreateVector(0.9, 0.95, 1));
-    mod.SetUIWidgetDepth(desc, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetVisible(desc, false);
+    const widgets: Partial<Record<QuestScope, QuestScopeWidgets>> = {};
 
-    // Progress line
-    const progName = nextUiName();
-    mod.AddUIText(
-        progName,
-        mod.CreateVector(baseX + 12, baseY + 98, 0),
-        mod.CreateVector(panelWidth - 24, 20, 0),
-        mod.UIAnchor.TopLeft,
-        MakeMessage(STR.empty),
-        player
-    );
-    const progress = mod.FindUIWidgetWithName(progName) as mod.UIWidget;
-    mod.SetUITextAnchor(progress, mod.UIAnchor.CenterLeft);
-    mod.SetUITextSize(progress, 18);
-    mod.SetUITextColor(progress, mod.CreateVector(0.8, 0.9, 1));
-    mod.SetUIWidgetDepth(progress, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetVisible(progress, false);
+    for (let index = 0; index < QUEST_SCOPE_ORDER.length; index++) {
+        const scope = QUEST_SCOPE_ORDER[index];
+        widgets[scope] = createQuestPanel(player, index);
+    }
 
-    const ui: PlayerQuestUI = { panel, title, desc, progress };
+    const ui: PlayerQuestUI = { widgets };
     g_playerUIs[id] = ui;
     return ui;
 }
@@ -871,33 +1022,92 @@ function hidePlayerQuestUI(player: mod.Player) {
     const id = mod.GetObjId(player);
     const ui = g_playerUIs[id];
     if (!ui) return;
-    mod.SetUIWidgetVisible(ui.panel, false);
-    mod.SetUIWidgetVisible(ui.title, false);
-    mod.SetUIWidgetVisible(ui.desc, false);
-    mod.SetUIWidgetVisible(ui.progress, false);
+    for (const scope of QUEST_SCOPE_ORDER) {
+        const widgets = ui.widgets[scope];
+        if (!widgets) continue;
+        mod.SetUIWidgetVisible(widgets.panel, false);
+        mod.SetUIWidgetVisible(widgets.quest_title, false);
+        mod.SetUIWidgetVisible(widgets.title, false);
+        mod.SetUIWidgetVisible(widgets.desc, false);
+        mod.SetUIWidgetVisible(widgets.progress, false);
+    }
 }
 
 function refreshUIForPlayer(player: mod.Player) {
     const id = mod.GetObjId(player);
     if (id < 0) return;
     const ui = ensurePlayerQuestUI(player);
-    const quest = q_manager.getRelevantQuestForPlayer(player);
 
-    if (!quest) {
-        hidePlayerQuestUI(player);
-        return;
+    const questsByScope: Partial<Record<QuestScope, QuestInstance | undefined>> = {};
+    questsByScope[QuestScope.Player] = q_manager.getPlayerQuest(player);
+
+    const getSquad = (mod as any).GetSquad as undefined | ((pl: mod.Player) => mod.Squad);
+    const squad = getSquad ? getSquad(player) : undefined;
+    if (squad) {
+        questsByScope[QuestScope.Squad] = q_manager.getSquadQuest(squad);
     }
 
-    const prog = quest.currentProgress ?? new QuestProgress(quest.quest.defaultTarget ?? 1);
-    // Title and description use string keys already, so wrap with MakeMessage
-    mod.SetUITextLabel(ui.title, MakeMessage(quest.quest.name));
-    mod.SetUITextLabel(ui.desc, MakeMessage(quest.quest.description));
-    mod.SetUITextLabel(ui.progress, MakeMessage(STR.progress, prog.current, prog.target, prog.percent));
+    const team = mod.GetTeam(player);
+    if (team) {
+        questsByScope[QuestScope.Team] = q_manager.getTeamQuest(team);
+    }
 
-    mod.SetUIWidgetVisible(ui.panel, true);
-    mod.SetUIWidgetVisible(ui.title, true);
-    mod.SetUIWidgetVisible(ui.desc, true);
-    mod.SetUIWidgetVisible(ui.progress, true);
+    questsByScope[QuestScope.Game] = q_manager.getGlobalQuest();
+
+    for (const scope of QUEST_SCOPE_ORDER) {
+        const widgets = ui.widgets[scope];
+        if (!widgets) continue;
+
+        const quest = questsByScope[scope];
+        if (!quest) {
+            mod.SetUIWidgetVisible(widgets.panel, false);
+            mod.SetUIWidgetVisible(widgets.quest_title, false);
+            mod.SetUIWidgetVisible(widgets.title, false);
+            mod.SetUIWidgetVisible(widgets.desc, false);
+            mod.SetUIWidgetVisible(widgets.progress, false);
+            continue;
+        }
+
+        const prog = quest.currentProgress ?? new QuestProgress(quest.quest.defaultTarget ?? 1);
+        if (scope === QuestScope.Player) {
+            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.selfQuestTitle));
+        } else if (scope === QuestScope.Squad) {
+            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.squadQuestTitle));
+        } else if (scope === QuestScope.Team) {
+            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.teamQuestTitle));
+        } else if (scope === QuestScope.Game) {
+            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.globalQuestTitle));
+        }
+
+        mod.SetUITextLabel(widgets.title, MakeMessage(quest.quest.name));
+        mod.SetUITextLabel(widgets.desc, MakeMessage(quest.quest.description));
+        mod.SetUITextLabel(widgets.progress, MakeMessage(STR.progress, prog.current, prog.target, prog.percent));
+
+        mod.SetUIWidgetVisible(widgets.panel, true);
+        mod.SetUIWidgetVisible(widgets.quest_title, true);
+        mod.SetUIWidgetVisible(widgets.title, true);
+        mod.SetUIWidgetVisible(widgets.desc, true);
+        mod.SetUIWidgetVisible(widgets.progress, true);
+    }
+}
+
+function pickRandomQuestForScope(scope: QuestScope): QuestDefinition | undefined {
+    const eligible = QuestRegistry.filter(def => def.availableScope.includes(scope));
+    if (eligible.length === 0) {
+        return undefined;
+    }
+
+    const totalWeight = eligible.reduce((sum, def) => sum + (def.randomWeight ?? 1), 0);
+    let roll = Math.random() * (totalWeight > 0 ? totalWeight : 1);
+
+    for (const def of eligible) {
+        roll -= def.randomWeight ?? 1;
+        if (roll <= 0) {
+            return def;
+        }
+    }
+
+    return eligible[eligible.length - 1];
 }
 
 function refreshUIForAllPlayers() {
@@ -906,34 +1116,101 @@ function refreshUIForAllPlayers() {
     }
 }
 
-function playersMatchingQuest(questInstance: QuestInstance): mod.Player[] {
-    const players: mod.Player[] = [];
-    if (questInstance.scope === QuestScope.Game) {
-        return [...g_activePlayers];
-    }
-    if (questInstance.scope === QuestScope.Player && questInstance.player) {
-        const pid = mod.GetObjId(questInstance.player);
-        const p = g_activePlayers.find(x => mod.GetObjId(x) === pid);
-        return p ? [p] : [];
-    }
-    if (questInstance.scope === QuestScope.Team && questInstance.team) {
-        for (const p of g_activePlayers) {
-            if (mod.GetTeam(p) === questInstance.team) players.push(p);
-        }
-        return players;
-    }
-    if (questInstance.scope === QuestScope.Squad && questInstance.squad) {
-        const getSquad = (mod as any).GetSquad as undefined | ((pl: mod.Player) => mod.Squad);
-        if (!getSquad) return players; // unknown API; nothing to do
-        for (const p of g_activePlayers) {
-            if (getSquad(p) === questInstance.squad) players.push(p);
-        }
-        return players;
-    }
-    return players;
-}
-
 function RefreshUIForQuestScope(questInstance: QuestInstance) {
     const targets = playersMatchingQuest(questInstance);
     for (const p of targets) refreshUIForPlayer(p);
 }
+
+function createQuestPanel(player: mod.Player, orderIndex: number): QuestScopeWidgets {
+    const offsetY = QUEST_BASE_Y + orderIndex * (QUEST_PANEL_HEIGHT + QUEST_PANEL_SPACING_Y);
+
+    const panelName = nextUiName();
+    const quest_titleName = nextUiName();
+    const titleName = nextUiName();
+    const descName = nextUiName();
+    const progName = nextUiName();
+
+    modlib.ParseUI({
+        type: "Container",
+        name: panelName,
+        position: [-QUEST_BASE_X, offsetY, 0],
+        size: [QUEST_PANEL_WIDTH, QUEST_PANEL_HEIGHT, 0],
+        anchor: mod.UIAnchor.TopRight,
+        playerId: player,
+        padding: 4,
+        bgFill: mod.UIBgFill.Blur,
+        bgColor: BATTLEFIELD_GREY,
+        bgAlpha: 0.65,
+        visible: false,
+        children: [
+            {
+                type: "Text",
+                name: titleName,
+                position: [0, yLineOffset(0), 0],
+                size: [QUEST_PANEL_WIDTH - 24, 28, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 22,
+                textColor: [1, 1, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: quest_titleName,
+                position: [-12, yLineOffset(1), 0],
+                size: [QUEST_PANEL_WIDTH - 24, 28, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 22,
+                textColor: [1, 1, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: descName,
+                position: [-12, yLineOffset(2), 0],
+                size: [QUEST_PANEL_WIDTH - 24, 48, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.TopRight,
+                textSize: 18,
+                textColor: [0.9, 0.95, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: progName,
+                position: [-12, yLineOffset(3), 0],
+                size: [QUEST_PANEL_WIDTH - 24, 20, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 18,
+                textColor: [0.8, 0.9, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+        ],
+    });
+
+    const panel = mod.FindUIWidgetWithName(panelName) as mod.UIWidget;
+    const quest_title = mod.FindUIWidgetWithName(quest_titleName) as mod.UIWidget;
+    const title = mod.FindUIWidgetWithName(titleName) as mod.UIWidget;
+    const desc = mod.FindUIWidgetWithName(descName) as mod.UIWidget;
+    const progress = mod.FindUIWidgetWithName(progName) as mod.UIWidget;
+
+    mod.SetUIWidgetDepth(panel, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(quest_title, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(title, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(desc, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(progress, mod.UIDepth.AboveGameUI);
+
+    return { panel, quest_title, title, desc, progress };
+}
+
+function yLineOffset(index: number): number { return index * LINE_HEIGHT; }
