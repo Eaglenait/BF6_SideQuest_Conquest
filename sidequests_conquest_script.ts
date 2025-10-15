@@ -201,6 +201,7 @@ class QuestManager {
     constructor() {}
 
     init(initialQuests: { quest: QuestDefinition; scope: QuestScope; ctx: QuestContext }[] = []) {
+        DebugMessage(STR.questManagerInitializing);
         this.activeQuests = [];
         this.pastQuests = [];
         this.activeGlobalQuest = undefined;
@@ -491,16 +492,12 @@ class QuestManager {
     }
 }
 
-type QuestScopeWidgets = {
-    panel: mod.UIWidget;
-    title: mod.UIWidget;
-    quest_title: mod.UIWidget;
-    desc: mod.UIWidget;
-    progress: mod.UIWidget;
-};
-
 type PlayerQuestUI = {
-    widgets: Partial<Record<QuestScope, QuestScopeWidgets>>;
+    root: mod.UIWidget;
+    header: mod.UIWidget;
+    title: mod.UIWidget;
+    description: mod.UIWidget;
+    progress: mod.UIWidget;
 };
 
 ///////////////////////////////// MODEL END //////////////////////////////////
@@ -549,6 +546,7 @@ const pistolKills_Quest: QuestDefinition = {
     updateSources: [QuestUpdateSource.OnPlayerEarnedKill],
     update: (ctx: QuestContext) => {
         Log(STR.debug.pistolKillsQuestDebug, ctx.eventPlayer, ctx.eventWeaponUnlock);
+        DebugMessage(STR.debug.pistolKillsQuestDebug, ctx.eventWeaponUnlock);
         if (!ctx.questInstance) {
             return defaultUpdateResult;
         }
@@ -619,13 +617,11 @@ const g_playerUIs: { [playerId: number]: PlayerQuestUI } = {};
 const g_activePlayers: mod.Player[] = [];
 let g_uiUniqueCounter = 1;
 
-const QUEST_SCOPE_ORDER: QuestScope[] = [QuestScope.Player, QuestScope.Squad, QuestScope.Team, QuestScope.Game];
-const QUEST_BASE_X = 50;
-const QUEST_BASE_Y = 120;
-const QUEST_PANEL_WIDTH = 420;
-const QUEST_PANEL_HEIGHT = 120;
-const QUEST_PANEL_SPACING_Y = 12;
-const LINE_HEIGHT = 18;
+const PLAYER_UI_OFFSET_X = 48;
+const PLAYER_UI_OFFSET_Y = 120;
+const PLAYER_UI_WIDTH = 420;
+const PLAYER_UI_HEIGHT = 128;
+const PLAYER_UI_LINE_HEIGHT = 24;
 
 ///////////////////////////////// GAME VARIABLE DATA END //////////////////////////////////
 
@@ -755,8 +751,9 @@ export async function OnPlayerLeaveGame(eventNumber: number): Promise<void> {
     const idx = g_activePlayers.findIndex(p => mod.GetObjId(p) === eventNumber);
     if (idx !== -1) {
         const player = g_activePlayers[idx];
+        hidePlayerQuestUI(player);
         g_activePlayers.splice(idx, 1);
-        destroyPlayerQuestUI(player);
+        delete g_playerUIs[eventNumber];
     }
 }
 
@@ -764,7 +761,9 @@ export async function OnPlayerLeaveGame(eventNumber: number): Promise<void> {
 export async function OnPlayerDeployed(eventPlayer: mod.Player): Promise<void> {
     Log(STR.gameManagerPlayerDeployedLog, eventPlayer);
     ensurePlayerTracked(eventPlayer);
-    ensurePlayerQuestUI(eventPlayer);
+    if (!isPlayerAi(eventPlayer)) {
+        ensurePlayerQuestUI(eventPlayer);
+    }
     assignRandomQuestToPlayer(eventPlayer);
     refreshUIForPlayer(eventPlayer);
 }
@@ -838,7 +837,8 @@ export async function OnPlayerSwitchTeam(eventPlayer: mod.Player, eventTeam: mod
 
 export async function OnGameModeEnding(): Promise<void> {}
 
-export async function OngoingGlobal(): Promise<void> {}
+export async function OngoingGlobal(): Promise<void> {
+}
 
 // Triggered on main gamemode start/end. Useful for game start setup and cleanup.
 export async function OnGameModeStarted(): Promise<void> {
@@ -967,53 +967,100 @@ function nextUiName(): string {
 }
 
 
-function destroyPlayerQuestUI(player: mod.Player) {
+function ensurePlayerQuestUI(player: mod.Player): PlayerQuestUI | undefined {
     const id = mod.GetObjId(player);
+    if (id < 0) return undefined;
+
     const existing = g_playerUIs[id];
-    if (!existing) return;
+    if (existing) return existing;
 
-    for (const scope of QUEST_SCOPE_ORDER) {
-        const widgets = existing.widgets[scope];
-        if (!widgets) continue;
+    const rootName = nextUiName();
+    const headerName = nextUiName();
+    const titleName = nextUiName();
+    const descriptionName = nextUiName();
+    const progressName = nextUiName();
 
-        try {
-            mod.DeleteUIWidget(widgets.panel);
-        } catch { }
-    }
+    modlib.ParseUI({
+        type: "Container",
+        name: rootName,
+        position: [-PLAYER_UI_OFFSET_X, PLAYER_UI_OFFSET_Y, 0],
+        size: [PLAYER_UI_WIDTH, PLAYER_UI_HEIGHT, 0],
+        anchor: mod.UIAnchor.TopRight,
+        playerId: player,
+        padding: 10,
+        bgFill: mod.UIBgFill.Blur,
+        bgColor: BATTLEFIELD_GREY,
+        bgAlpha: 0.7,
+        visible: false,
+        children: [
+            {
+                type: "Text",
+                name: headerName,
+                position: [0, 0, 0],
+                size: [PLAYER_UI_WIDTH - 20, PLAYER_UI_LINE_HEIGHT, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 22,
+                textColor: [1, 1, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: titleName,
+                position: [0, PLAYER_UI_LINE_HEIGHT + 4, 0],
+                size: [PLAYER_UI_WIDTH - 20, PLAYER_UI_LINE_HEIGHT + 2, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 20,
+                textColor: [0.95, 0.97, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: descriptionName,
+                position: [0, (PLAYER_UI_LINE_HEIGHT + 4) * 2, 0],
+                size: [PLAYER_UI_WIDTH - 20, PLAYER_UI_LINE_HEIGHT * 2, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.TopRight,
+                textSize: 18,
+                textColor: [0.85, 0.9, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+            {
+                type: "Text",
+                name: progressName,
+                position: [0, (PLAYER_UI_LINE_HEIGHT + 4) * 3.1, 0],
+                size: [PLAYER_UI_WIDTH - 20, PLAYER_UI_LINE_HEIGHT, 0],
+                anchor: mod.UIAnchor.TopRight,
+                textAnchor: mod.UIAnchor.CenterRight,
+                textSize: 18,
+                textColor: [0.75, 0.85, 1],
+                textLabel: MakeMessage(STR.empty),
+                bgAlpha: 0,
+                visible: false,
+            },
+        ],
+    });
 
-    delete g_playerUIs[id];
-}
+    const root = mod.FindUIWidgetWithName(rootName) as mod.UIWidget;
+    const header = mod.FindUIWidgetWithName(headerName) as mod.UIWidget;
+    const title = mod.FindUIWidgetWithName(titleName) as mod.UIWidget;
+    const description = mod.FindUIWidgetWithName(descriptionName) as mod.UIWidget;
+    const progress = mod.FindUIWidgetWithName(progressName) as mod.UIWidget;
 
-function ensurePlayerQuestUI(player: mod.Player): PlayerQuestUI {
-    const id = mod.GetObjId(player);
-    const existing = g_playerUIs[id];
+    mod.SetUIWidgetDepth(root, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(header, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(title, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(description, mod.UIDepth.AboveGameUI);
+    mod.SetUIWidgetDepth(progress, mod.UIDepth.AboveGameUI);
 
-    if (existing) {
-        let requiresUpgrade = false;
-        for (const scope of QUEST_SCOPE_ORDER) {
-            const widgets = existing.widgets[scope];
-            if (!widgets) continue;
-            if (!widgets.quest_title) {
-                requiresUpgrade = true;
-                break;
-            }
-        }
-
-        if (!requiresUpgrade) {
-            return existing;
-        }
-
-        destroyPlayerQuestUI(player);
-    }
-
-    const widgets: Partial<Record<QuestScope, QuestScopeWidgets>> = {};
-
-    for (let index = 0; index < QUEST_SCOPE_ORDER.length; index++) {
-        const scope = QUEST_SCOPE_ORDER[index];
-        widgets[scope] = createQuestPanel(player, index);
-    }
-
-    const ui: PlayerQuestUI = { widgets };
+    const ui: PlayerQuestUI = { root, header, title, description, progress };
     g_playerUIs[id] = ui;
     return ui;
 }
@@ -1022,73 +1069,40 @@ function hidePlayerQuestUI(player: mod.Player) {
     const id = mod.GetObjId(player);
     const ui = g_playerUIs[id];
     if (!ui) return;
-    for (const scope of QUEST_SCOPE_ORDER) {
-        const widgets = ui.widgets[scope];
-        if (!widgets) continue;
-        mod.SetUIWidgetVisible(widgets.panel, false);
-        mod.SetUIWidgetVisible(widgets.quest_title, false);
-        mod.SetUIWidgetVisible(widgets.title, false);
-        mod.SetUIWidgetVisible(widgets.desc, false);
-        mod.SetUIWidgetVisible(widgets.progress, false);
-    }
+    mod.SetUIWidgetVisible(ui.root, false);
+    mod.SetUIWidgetVisible(ui.header, false);
+    mod.SetUIWidgetVisible(ui.title, false);
+    mod.SetUIWidgetVisible(ui.description, false);
+    mod.SetUIWidgetVisible(ui.progress, false);
 }
 
 function refreshUIForPlayer(player: mod.Player) {
+    if (isPlayerAi(player)) return;
+
     const id = mod.GetObjId(player);
     if (id < 0) return;
+
     const ui = ensurePlayerQuestUI(player);
+    if (!ui) return;
 
-    const questsByScope: Partial<Record<QuestScope, QuestInstance | undefined>> = {};
-    questsByScope[QuestScope.Player] = q_manager.getPlayerQuest(player);
-
-    const getSquad = (mod as any).GetSquad as undefined | ((pl: mod.Player) => mod.Squad);
-    const squad = getSquad ? getSquad(player) : undefined;
-    if (squad) {
-        questsByScope[QuestScope.Squad] = q_manager.getSquadQuest(squad);
+    const quest = q_manager.getPlayerQuest(player);
+    if (!quest) {
+        hidePlayerQuestUI(player);
+        return;
     }
 
-    const team = mod.GetTeam(player);
-    if (team) {
-        questsByScope[QuestScope.Team] = q_manager.getTeamQuest(team);
-    }
+    const progress = quest.currentProgress ?? new QuestProgress(quest.quest.defaultTarget ?? 1);
 
-    questsByScope[QuestScope.Game] = q_manager.getGlobalQuest();
+    mod.SetUITextLabel(ui.header, MakeMessage(STR.selfQuestTitle));
+    mod.SetUITextLabel(ui.title, MakeMessage(quest.quest.name));
+    mod.SetUITextLabel(ui.description, MakeMessage(quest.quest.description));
+    mod.SetUITextLabel(ui.progress, MakeMessage(STR.progress, progress.current, progress.target, progress.percent));
 
-    for (const scope of QUEST_SCOPE_ORDER) {
-        const widgets = ui.widgets[scope];
-        if (!widgets) continue;
-
-        const quest = questsByScope[scope];
-        if (!quest) {
-            mod.SetUIWidgetVisible(widgets.panel, false);
-            mod.SetUIWidgetVisible(widgets.quest_title, false);
-            mod.SetUIWidgetVisible(widgets.title, false);
-            mod.SetUIWidgetVisible(widgets.desc, false);
-            mod.SetUIWidgetVisible(widgets.progress, false);
-            continue;
-        }
-
-        const prog = quest.currentProgress ?? new QuestProgress(quest.quest.defaultTarget ?? 1);
-        if (scope === QuestScope.Player) {
-            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.selfQuestTitle));
-        } else if (scope === QuestScope.Squad) {
-            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.squadQuestTitle));
-        } else if (scope === QuestScope.Team) {
-            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.teamQuestTitle));
-        } else if (scope === QuestScope.Game) {
-            mod.SetUITextLabel(widgets.quest_title, MakeMessage(STR.globalQuestTitle));
-        }
-
-        mod.SetUITextLabel(widgets.title, MakeMessage(quest.quest.name));
-        mod.SetUITextLabel(widgets.desc, MakeMessage(quest.quest.description));
-        mod.SetUITextLabel(widgets.progress, MakeMessage(STR.progress, prog.current, prog.target, prog.percent));
-
-        mod.SetUIWidgetVisible(widgets.panel, true);
-        mod.SetUIWidgetVisible(widgets.quest_title, true);
-        mod.SetUIWidgetVisible(widgets.title, true);
-        mod.SetUIWidgetVisible(widgets.desc, true);
-        mod.SetUIWidgetVisible(widgets.progress, true);
-    }
+    mod.SetUIWidgetVisible(ui.root, true);
+    mod.SetUIWidgetVisible(ui.header, true);
+    mod.SetUIWidgetVisible(ui.title, true);
+    mod.SetUIWidgetVisible(ui.description, true);
+    mod.SetUIWidgetVisible(ui.progress, true);
 }
 
 function pickRandomQuestForScope(scope: QuestScope): QuestDefinition | undefined {
@@ -1117,100 +1131,9 @@ function refreshUIForAllPlayers() {
 }
 
 function RefreshUIForQuestScope(questInstance: QuestInstance) {
-    const targets = playersMatchingQuest(questInstance);
-    for (const p of targets) refreshUIForPlayer(p);
+    if (questInstance.scope !== QuestScope.Player || !questInstance.player) {
+        return;
+    }
+
+    refreshUIForPlayer(questInstance.player);
 }
-
-function createQuestPanel(player: mod.Player, orderIndex: number): QuestScopeWidgets {
-    const offsetY = QUEST_BASE_Y + orderIndex * (QUEST_PANEL_HEIGHT + QUEST_PANEL_SPACING_Y);
-
-    const panelName = nextUiName();
-    const quest_titleName = nextUiName();
-    const titleName = nextUiName();
-    const descName = nextUiName();
-    const progName = nextUiName();
-
-    modlib.ParseUI({
-        type: "Container",
-        name: panelName,
-        position: [-QUEST_BASE_X, offsetY, 0],
-        size: [QUEST_PANEL_WIDTH, QUEST_PANEL_HEIGHT, 0],
-        anchor: mod.UIAnchor.TopRight,
-        playerId: player,
-        padding: 4,
-        bgFill: mod.UIBgFill.Blur,
-        bgColor: BATTLEFIELD_GREY,
-        bgAlpha: 0.65,
-        visible: false,
-        children: [
-            {
-                type: "Text",
-                name: titleName,
-                position: [0, yLineOffset(0), 0],
-                size: [QUEST_PANEL_WIDTH - 24, 28, 0],
-                anchor: mod.UIAnchor.TopRight,
-                textAnchor: mod.UIAnchor.CenterRight,
-                textSize: 22,
-                textColor: [1, 1, 1],
-                textLabel: MakeMessage(STR.empty),
-                bgAlpha: 0,
-                visible: false,
-            },
-            {
-                type: "Text",
-                name: quest_titleName,
-                position: [-12, yLineOffset(1), 0],
-                size: [QUEST_PANEL_WIDTH - 24, 28, 0],
-                anchor: mod.UIAnchor.TopRight,
-                textAnchor: mod.UIAnchor.CenterRight,
-                textSize: 22,
-                textColor: [1, 1, 1],
-                textLabel: MakeMessage(STR.empty),
-                bgAlpha: 0,
-                visible: false,
-            },
-            {
-                type: "Text",
-                name: descName,
-                position: [-12, yLineOffset(2), 0],
-                size: [QUEST_PANEL_WIDTH - 24, 48, 0],
-                anchor: mod.UIAnchor.TopRight,
-                textAnchor: mod.UIAnchor.TopRight,
-                textSize: 18,
-                textColor: [0.9, 0.95, 1],
-                textLabel: MakeMessage(STR.empty),
-                bgAlpha: 0,
-                visible: false,
-            },
-            {
-                type: "Text",
-                name: progName,
-                position: [-12, yLineOffset(3), 0],
-                size: [QUEST_PANEL_WIDTH - 24, 20, 0],
-                anchor: mod.UIAnchor.TopRight,
-                textAnchor: mod.UIAnchor.CenterRight,
-                textSize: 18,
-                textColor: [0.8, 0.9, 1],
-                textLabel: MakeMessage(STR.empty),
-                bgAlpha: 0,
-                visible: false,
-            },
-        ],
-    });
-
-    const panel = mod.FindUIWidgetWithName(panelName) as mod.UIWidget;
-    const quest_title = mod.FindUIWidgetWithName(quest_titleName) as mod.UIWidget;
-    const title = mod.FindUIWidgetWithName(titleName) as mod.UIWidget;
-    const desc = mod.FindUIWidgetWithName(descName) as mod.UIWidget;
-    const progress = mod.FindUIWidgetWithName(progName) as mod.UIWidget;
-
-    mod.SetUIWidgetDepth(panel, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetDepth(quest_title, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetDepth(title, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetDepth(desc, mod.UIDepth.AboveGameUI);
-    mod.SetUIWidgetDepth(progress, mod.UIDepth.AboveGameUI);
-
-    return { panel, quest_title, title, desc, progress };
-}
-
-function yLineOffset(index: number): number { return index * LINE_HEIGHT; }

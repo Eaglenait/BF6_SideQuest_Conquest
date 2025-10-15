@@ -1,26 +1,26 @@
 {
   "empty": "",
   "len": "{0} elems",
-  "questManagerInitializing": "[QuestManager] Initializing quest manager.",
-  "questManagerRegisterQuest": "[QuestManager] Register quest '{}' with scope {} for player {}",
-  "questManagerOnStartError": "[QuestManager] Failed to run onStart for quest '{}':",
-  "questManagerUnregisterQuest": "[QuestManager] Unregister quest '{}' (Instance #{}).",
-  "questManagerResetPlayer": "[QuestManager] Resetting quests for player {}.",
-  "questManagerPlayerJoined": "[QuestManager] Player joined: {} (Team: {}).",
-  "questManagerUpdatingQuest": "[QuestManager] Updating quest '{}' (Instance #{}) for player {}.",
-  "questManagerUpdateError": "[QuestManager] Error updating quest '{}' (Instance #{}):",
-  "questManagerQuestCompleted": "[QuestManager] Quest '{}' completed (Instance #{}).",
-  "questManagerOnCompleteError": "[QuestManager] Failed to run onComplete for quest '{}':",
+  "questManagerInitializing": "QuestManager - Initializing quest manager.",
+  "questManagerRegisterQuest": "QuestManager - Register quest '{}' with scope {} for player {}",
+  "questManagerOnStartError": "QuestManager - Failed to run onStart for quest '{}':",
+  "questManagerUnregisterQuest": "QuestManager - Unregister quest '{}' (Instance #{}).",
+  "questManagerResetPlayer": "QuestManager - Resetting quests for player {}.",
+  "questManagerPlayerJoined": "QuestManager - Player joined: {} (Team: {}).",
+  "questManagerUpdatingQuest": "QuestManager - Updating quest '{}' (Instance #{}) for player {}.",
+  "questManagerUpdateError": "QuestManager - Error updating quest '{}' (Instance #{}):",
+  "questManagerQuestCompleted": "QuestManager - Quest '{}' completed (Instance #{}).",
+  "questManagerOnCompleteError": "QuestManager - Failed to run onComplete for quest '{}':",
   "questStartedNotification": "Quest Started: {}",
   "questProgressNotification": "Quest Progress: {} {}%",
   "questCompletedNotification": "Quest Completed: {}",
   "playerWelcomeMessage": "Welcome!",
-  "gameManagerPlayerDeployedLog": "[GameManager] Player deployed: {}",
-  "gameManagerModeStartedLog": "[GameManager] Game mode started. Initializing Quest Manager.",
-  "gameManagerKillUpdateError": "[GameManager] [Error] Update player OnPlayerEarnedKill player:{} - error: {}",
+  "gameManagerPlayerDeployedLog": "GameManager - Player deployed: {}",
+  "gameManagerModeStartedLog": "GameManager - Game mode started. Initializing Quest Manager.",
+  "gameManagerKillUpdateError": "GameManager - Error - Update player OnPlayerEarnedKill player:{} - error: {}",
   "progress": "{}/{} ({}%)",
-  "questDebugUpdateCall": "[Quest] Calling update for {}",
-  "questDebugUpdateReturn": "[Quest] Update returned {}",
+  "questDebugUpdateCall": "Quest - Calling update for {}",
+  "questDebugUpdateReturn": "Quest - Update returned {}",
   
   "selfQuestTitle":"Personal Quest",
   "squadQuestTitle":"Squad Quest",
@@ -29,21 +29,21 @@
 
   "logging": {
     "repeat_count": "{}x ",
-    "log_info_prefix": "[Info] ",
-    "log_warning_prefix": "[Warning] ",
-    "log_error_prefix": "[Error] "
+    "log_info_prefix": "Info - ",
+    "log_warning_prefix": "Warning - ",
+    "log_error_prefix": "Error - "
   },
   "debug": {
-    "pistolKillsQuestDebug": "[Debug] pistol quest update weapon:{}",
-    "playerDamageTest": "[Debug] eventPlayer {} damaged by eventOtherPlayer {} with damageType {}",
-    "applyPerk": "[Debug] applying perk {} to player {}"
+    "pistolKillsQuestDebug": "Debug - pistol quest update weapon {}",
+    "playerDamageTest": "Debug - eventPlayer {} damaged by eventOtherPlayer {} with damageType {}",
+    "applyPerk": "Debug - applying perk {} to player {}"
 
   },
   "errors": {
     "gameManager": {
       "questUpdateCallError": "Error whle calling update for the quest '{}': {}",
-      "damageUpdateError": "[GameManager] [Error] Update player OnPlayerDamaged player:{} - error: {}",
-      "perkApplyError": "[GameManager] [Error] Apply perk {} to player {} - error: {}"
+      "damageUpdateError": "GameManager - Error - Update player OnPlayerDamaged player:{} - error: {}",
+      "perkApplyError": "GameManager - Error - Apply perk {} to player {} - error: {}"
     }
   },
   "quests": {
